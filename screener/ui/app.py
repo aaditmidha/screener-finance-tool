@@ -20,7 +20,7 @@ from screener.config import CONFIG
 from screener.database.engine import build_engine, get_session_factory
 from screener.exporters import excel as excel_exporter
 from screener.exporters.tearsheet import TearsheetInput, generate_tearsheet
-from screener.models import custom_screener, working_capital as wc
+from screener.models import beneish_adapter, custom_screener, pledge_monitor, working_capital as wc
 from screener.models.peer_comparison import PeerComparison
 from screener.scraper.acquisition import CompanyDataService, search_companies
 from screener.scraper.parser import CompanyFinancials
@@ -153,13 +153,47 @@ def _render_screener_tab(st: Any, service: CompanyDataService) -> None:
 
 
 def _render_beneish(st: Any, fin: CompanyFinancials) -> None:
-    """Render the Beneish M-Score metric with a red/green flag."""
-    # Beneish needs granular inputs Screener often omits; degrade to N/A.
-    emoji, colour, caption = components.beneish_flag(None)
+    """Render the Beneish M-Score with a red/green flag and data disclosure."""
+    sourcing = beneish_adapter.from_financials(fin)
+    result = sourcing.result if sourcing else None
+    emoji, colour, caption = components.beneish_flag(result)
     st.markdown(
         f"<span style='color:{colour};font-size:1.4rem'>{emoji} {caption}</span>",
         unsafe_allow_html=True,
     )
+    if sourcing:
+        st.caption(f"Computed on {sourcing.periods[0]} → {sourcing.periods[1]} annuals.")
+        note = components.data_quality_note(sourcing.approximated, sourcing.missing)
+        if note:
+            st.caption(f"ℹ️ {note}. Results directionally accurate — see DECISIONS.md §7.1.")
+
+
+def _render_pledge_tab(st: Any, service: CompanyDataService) -> None:
+    """Render the promoter pledge monitor from the last fetched page."""
+    if not service.last_html:
+        st.info("Load a company first.")
+        return
+    history = pledge_monitor.parse_pledge_history(service.last_html)
+    if not history:
+        st.info("No promoter pledge data available for this company on Screener.")
+        return
+
+    result = pledge_monitor.analyze(history)
+    emoji, colour, caption = components.pledge_badge(result)
+    st.markdown(
+        f"<span style='color:{colour};font-size:1.4rem'>{emoji} {caption}</span>",
+        unsafe_allow_html=True,
+    )
+    st.plotly_chart(components.build_pledge_figure(history), use_container_width=True)
+
+    for period, threshold in result.crossings:
+        message = f"Pledge crossed {threshold:.0f}% in {period}"
+        if threshold >= pledge_monitor._cfg["critical_pct"]:
+            st.error(message)
+        else:
+            st.warning(message)
+    if not result.crossings:
+        st.success("No threshold crossings in the available history.")
 
 
 def _render_wc_heatmap(st: Any, fin: CompanyFinancials) -> None:
@@ -188,11 +222,16 @@ def main() -> None:
     service = st.cache_resource(_build_service)()
 
     # --- Search with autocomplete ----------------------------------------- #
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _cached_search(q: str):
+        """Cache autocomplete hits so tab-click reruns don't re-query Screener."""
+        return search_companies(q)
+
     query = st.text_input("Search company", placeholder="e.g. Infosys, CG Power…")
     symbol: str | None = None
     name: str = ""
     if query:
-        matches = search_companies(query)
+        matches = _cached_search(query)
         if matches:
             labels = [f"{m.name} ({m.symbol})" for m in matches]
             chosen = st.selectbox("Matches", labels)
@@ -207,8 +246,14 @@ def main() -> None:
     # --- Freshness indicator ---------------------------------------------- #
     st.caption(f"Data freshness: {components.format_freshness(service.freshness(symbol))}")
 
-    with st.spinner(f"Loading {symbol}…"):
-        fin = service.refresh(symbol)
+    # Refresh once per selected symbol; tab clicks rerun the script but must
+    # not hammer Screener with repeat fetches (the service object persists via
+    # cache_resource, so last_html survives reruns for the pledge tab).
+    if st.session_state.get("loaded_symbol") != symbol:
+        with st.spinner(f"Loading {symbol}…"):
+            st.session_state["fin"] = service.refresh(symbol)
+            st.session_state["loaded_symbol"] = symbol
+    fin = st.session_state["fin"]
 
     # --- Headline: Beneish flag + WC heatmap ------------------------------ #
     left, right = st.columns([1, 2])
@@ -228,8 +273,9 @@ def main() -> None:
     )
 
     # --- Tabs ------------------------------------------------------------- #
-    annual, quarterly, ratios, peers, tearsheet, screener_tab = st.tabs(
-        ["Annual", "Quarterly", "Ratios", "Peer Compare", "Tearsheet", "Custom Screener"]
+    annual, quarterly, ratios, peers, tearsheet, screener_tab, pledge = st.tabs(
+        ["Annual", "Quarterly", "Ratios", "Peer Compare", "Tearsheet",
+         "Custom Screener", "🚨 Pledge"]
     )
     with annual:
         _render_statement_tab(st, "annual P&L", fin.profit_loss)
@@ -245,6 +291,8 @@ def main() -> None:
         _render_tearsheet_tab(st, symbol, name or fin.name, metrics={})
     with screener_tab:
         _render_screener_tab(st, service)
+    with pledge:
+        _render_pledge_tab(st, service)
 
 
 if __name__ == "__main__":

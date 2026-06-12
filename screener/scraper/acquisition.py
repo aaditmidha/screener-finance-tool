@@ -219,6 +219,9 @@ class CompanyDataService:
         self._cfg = (config or CONFIG)["scraper"]
         self._companies = CompanyRepository(session)
         self._annual = AnnualDataRepository(session)
+        #: Raw HTML of the most recently refreshed page (e.g. for the pledge
+        #: parser, which reads sections outside the financial statements).
+        self.last_html: str | None = None
 
     def _company_url(self, symbol: str) -> str:
         """Return the Screener company URL for *symbol*."""
@@ -254,6 +257,7 @@ class CompanyDataService:
         needs = force or self._companies.needs_refresh(symbol)
 
         html = self._fetch_page(self._company_url(symbol))
+        self.last_html = html
         fin = parse_company_financials(html)
 
         if not needs:

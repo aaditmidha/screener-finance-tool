@@ -1,0 +1,76 @@
+2026-06-13 01:01:32.590 Uvicorn server started on 0.0.0.0:8537
+2026-06-13 01:01:48,035 | INFO | screener.database.engine | Database engine created: sqlite:///data/screener.db
+2026-06-13 01:02:15,551 | INFO | screener.scraper.acquisition | Search 'infosys' → 6 result(s)
+2026-06-13 01:02:15,578 | INFO | screener.database.repository | Cache miss for INFY — needs scrape
+2026-06-13 01:02:39,103 | INFO | screener.scraper.parser | Parsed financials for Infosys Ltd ()
+2026-06-13 01:02:39,149 | INFO | screener.scraper.acquisition | Persisted 12 annual row(s) for INFY
+2026-06-13 01:02:39,157 | WARNING | screener.models.beneish | Beneish DSRI undefined (zero denominator); using neutral 1.0
+2026-06-13 01:02:39,159 | WARNING | screener.models.beneish | Beneish AQI undefined (zero denominator); using neutral 1.0
+2026-06-13 01:02:39,162 | WARNING | screener.models.beneish | Beneish SGAI undefined (zero denominator); using neutral 1.0
+2026-06-13 01:02:39,163 | INFO | screener.models.beneish_adapter | Beneish for  [Mar 2025→Mar 2026]: M=-2.56 (non_manipulator); approx=4 missing=2
+2026-06-13 01:02:39,168 | INFO | screener.ui.components | Granular working-capital rows unavailable for 
+2026-06-13 01:02:39,351 | INFO | screener.exporters.excel | Excel exported: exports\excel\model.xlsx
+2026-06-13 01:02:39.377 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:39.405 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:39.413 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:39.421 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:39.426 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:39,597 | INFO | screener.models.pledge_monitor | Shareholding table has no pledge row
+2026-06-13 01:02:51,872 | WARNING | screener.models.beneish | Beneish DSRI undefined (zero denominator); using neutral 1.0
+2026-06-13 01:02:51,874 | WARNING | screener.models.beneish | Beneish AQI undefined (zero denominator); using neutral 1.0
+2026-06-13 01:02:51,875 | WARNING | screener.models.beneish | Beneish SGAI undefined (zero denominator); using neutral 1.0
+2026-06-13 01:02:51,876 | INFO | screener.models.beneish_adapter | Beneish for  [Mar 2025→Mar 2026]: M=-2.56 (non_manipulator); approx=4 missing=2
+2026-06-13 01:02:51,880 | INFO | screener.ui.components | Granular working-capital rows unavailable for 
+2026-06-13 01:02:51,949 | INFO | screener.exporters.excel | Excel exported: exports\excel\model.xlsx
+2026-06-13 01:02:51.974 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:51.982 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:51.990 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:51.995 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:52.000 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:52,021 | INFO | screener.models.custom_screener | Screened 1 companies on 'roce * revenue_growth_3yr'
+2026-06-13 01:02:52.022 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-06-13 01:02:52,140 | INFO | screener.models.pledge_monitor | Shareholding table has no pledge row

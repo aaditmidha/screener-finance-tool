@@ -94,6 +94,46 @@ class TestFormatFreshness:
         assert "30m ago" in components.format_freshness(updated, now=now)
 
 
+class TestDataQualityNote:
+    def test_empty_when_all_exact(self) -> None:
+        assert components.data_quality_note([], []) == ""
+
+    def test_lists_both_kinds(self) -> None:
+        note = components.data_quality_note(
+            ["COGS ≈ Total Expenses"], ["trade receivables (DSRI neutral)"]
+        )
+        assert "Approximated" in note and "COGS" in note
+        assert "Unavailable" in note and "receivables" in note
+
+
+class TestPledgeComponents:
+    def _result(self, level: str, latest: float = 25.0, rising: bool = False):
+        from screener.models.pledge_monitor import PledgeResult
+        return PledgeResult(latest_pct=latest, max_pct=latest,
+                            rising=rising, risk_level=level)
+
+    def test_high_risk_is_red(self) -> None:
+        emoji, _c, caption = components.pledge_badge(self._result("high", 45.0))
+        assert emoji == "🔴"
+        assert "45.0%" in caption
+
+    def test_low_risk_is_green(self) -> None:
+        emoji, _c, _t = components.pledge_badge(self._result("low", 5.0))
+        assert emoji == "🟢"
+
+    def test_rising_noted_in_caption(self) -> None:
+        _e, _c, caption = components.pledge_badge(self._result("high", 30.0, rising=True))
+        assert "rising" in caption
+
+    def test_pledge_figure_has_threshold_lines(self) -> None:
+        from screener.models.pledge_monitor import PledgePoint
+        history = [PledgePoint("Mar 2023", 10.0), PledgePoint("Mar 2024", 30.0)]
+        figure = components.build_pledge_figure(history)
+        assert list(figure.data[0].y) == [10.0, 30.0]
+        # warning + critical hlines present as layout shapes
+        assert len(figure.layout.shapes) == 2
+
+
 class TestWorkingCapital:
     def test_missing_rows_returns_empty(self) -> None:
         fin = parse_company_financials(_PAGE_NO_WC)

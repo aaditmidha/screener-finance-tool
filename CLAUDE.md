@@ -19,6 +19,10 @@ screener/
   ui/            ← Streamlit app
   tests/         ← pytest
 
+## Key References
+- DECISIONS.md — architecture decisions log; §7.1 has the Screener→Beneish
+  field mapping and approximation policy. Update it when making non-obvious choices.
+
 ## Rules
 - Never hardcode URLs, thresholds, or date ranges — use config.yaml
 - Every function needs type hints and a docstring

@@ -5,7 +5,11 @@ accounting checks, peer ranking, and an AI-written one-page investment
 tearsheet. Data is scraped from [Screener.in](https://www.screener.in),
 cached in SQLite, and served through a Streamlit dashboard.
 
-![Dashboard screenshot](docs/screenshot.png)
+![Live demo](docs/demo.gif)
+
+*Live demo: searching Infosys, the Beneish M-Score computed on real data with
+its data-quality disclosure, statement tabs, the custom formula screener, and
+the pledge monitor.*
 
 ## Live App
 
@@ -16,14 +20,14 @@ cached in SQLite, and served through a Streamlit dashboard.
 
 - **Company search** with live autocomplete against Screener's API
 - **Annual / Quarterly / Ratios** statement tabs with a data-freshness indicator (7-day scrape cache)
-- **Beneish M-Score** earnings-manipulation check with a red/green flag
+- **Beneish M-Score** earnings-manipulation check with a red/green flag, computed live from Screener statements with per-field data-quality disclosure (approximations documented in [DECISIONS.md §7.1](DECISIONS.md))
 - **Working-capital heatmap** (DSO / DIO / DPO / CCC by period, Plotly)
 - **Peer comparison** — auto-discovers sector peers, ranks by ROCE, ROE, revenue growth and a weighted composite score
 - **AI tearsheet** — a one-page plain-English summary (trends, red flags, peer view, overall view) generated via the **Groq API** (free tier; this project deliberately never uses paid LLM APIs)
 - **Custom formula screener** — define your own metric (e.g. `(pat / revenue) * revenue_growth_3yr`) and rank every downloaded company; formulas are AST-sandboxed (arithmetic only, can never execute code)
 - **Excel export** of all parsed statements; PDF export of tearsheets; **colour-scale CCC heatmap in Excel** (conditional formatting per metric row)
 - **Forensic models**: Beneish M-Score, forward & reverse DCF, earnings quality (CFO/PAT, accruals), capital-allocation score (ROIC vs WACC), cash-conversion cycle
-- **Promoter pledge risk monitor** — parses pledge history, flags >20%/>40% crossings and rising trends, cross-references crossings with subsequent price drops (India-specific red flag)
+- **Promoter pledge risk monitor** (🚨 Pledge tab) — pledge history line chart with threshold bands, green/amber/red badge, crossing alerts, and price-drop cross-referencing (India-specific red flag)
 - **Management credibility tracker** — extracts quantified guidance from earnings-call transcripts (Groq), pairs it with delivered actuals, and scores hit-rate + bias 0–10
 - **Annual-report downloader** — stealth Playwright fetcher with IR-page → NSE → BSE fallback chain, rotating user agents, 15s+ randomised BSE delays, and a local PDF cache (local use only)
 
@@ -91,9 +95,13 @@ Notes for the cloud environment:
 ## Tests & CI
 
 ```bash
-pytest                                   # 318 tests
-pytest --cov=screener --cov-fail-under=70   # coverage gate (currently ~93%)
+pytest                                   # 337 tests
+pytest --cov=screener --cov-fail-under=70   # coverage gate (currently ~92%)
 ```
+
+Design rationale for the non-obvious choices (Groq over Claude, SQLite over
+Postgres, AST sandboxing over eval, Beneish approximations) lives in
+[DECISIONS.md](DECISIONS.md).
 
 GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the
 full suite with the coverage gate on every push and pull request.

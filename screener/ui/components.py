@@ -170,6 +170,83 @@ def build_wc_heatmap_figure(heatmap: dict[str, list]) -> "object":
     return figure
 
 
+def data_quality_note(approximated: list[str], missing: list[str]) -> str:
+    """Render data-sourcing disclosures as one human-readable line.
+
+    Args:
+        approximated: Descriptions of approximated inputs.
+        missing: Descriptions of unavailable inputs (neutralised in the model).
+
+    Returns:
+        A disclosure string, empty when everything was exact.
+    """
+    parts: list[str] = []
+    if approximated:
+        parts.append("Approximated: " + "; ".join(approximated))
+    if missing:
+        parts.append("Unavailable (index neutralised): " + "; ".join(missing))
+    return ". ".join(parts)
+
+
+# Risk level → (emoji, hex colour) for the pledge badge.
+_PLEDGE_STYLE = {
+    "none": ("🟢", "#27ae60"),
+    "low": ("🟢", "#27ae60"),
+    "elevated": ("🟠", "#e67e22"),
+    "high": ("🔴", "#c0392b"),
+}
+
+
+def pledge_badge(result: "object") -> tuple[str, str, str]:
+    """Return (emoji, colour, caption) for a PledgeResult.
+
+    Args:
+        result: A :class:`screener.models.pledge_monitor.PledgeResult`.
+
+    Returns:
+        Tuple of (badge emoji, hex colour, caption text).
+    """
+    emoji, colour = _PLEDGE_STYLE.get(result.risk_level, ("⚪", "#7f8c8d"))
+    caption = f"Promoter pledge {result.latest_pct:.1f}% — {result.risk_level} risk"
+    if result.rising:
+        caption += " (rising)"
+    return (emoji, colour, caption)
+
+
+def build_pledge_figure(history: list) -> "object":
+    """Build a Plotly line chart of pledge % over time with threshold bands.
+
+    Args:
+        history: List of :class:`PledgePoint` (period, pledge_pct).
+
+    Returns:
+        A ``plotly.graph_objects.Figure``.
+    """
+    import plotly.graph_objects as go
+
+    from screener.config import CONFIG
+
+    cfg = CONFIG["thresholds"]["pledge"]
+    figure = go.Figure(
+        go.Scatter(
+            x=[p.period for p in history],
+            y=[p.pledge_pct for p in history],
+            mode="lines+markers",
+            name="Pledged %",
+        )
+    )
+    figure.add_hline(y=cfg["warning_pct"], line_dash="dash", line_color="#e67e22",
+                     annotation_text=f"warning {cfg['warning_pct']:.0f}%")
+    figure.add_hline(y=cfg["critical_pct"], line_dash="dash", line_color="#c0392b",
+                     annotation_text=f"critical {cfg['critical_pct']:.0f}%")
+    figure.update_layout(
+        title="Promoter pledge history",
+        yaxis_title="% of promoter holding pledged",
+        yaxis_rangemode="tozero",
+    )
+    return figure
+
+
 def _at(row: list[float | None], index: int) -> float | None:
     """Return ``row[index]`` or None if out of range."""
     return row[index] if 0 <= index < len(row) else None

@@ -148,3 +148,10 @@ class TestCompanyDataService:
         name, rows = service.get_annual_records("INFY")
         assert name == "Infosys Ltd"
         assert len(rows) == 2
+
+    def test_refresh_retains_last_html(self, session: Session) -> None:
+        """The raw page must stay available for non-statement parsers (pledge)."""
+        service = CompanyDataService(session, fetch_page=lambda url: _PAGE)
+        assert service.last_html is None
+        service.refresh("INFY")
+        assert service.last_html == _PAGE
