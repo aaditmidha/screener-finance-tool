@@ -112,14 +112,18 @@ def ccc(dso_days: float, dio_days: float, dpo_days: float) -> float:
     return dso_days + dio_days - dpo_days
 
 
-def heatmap_data(quarters: list[QuarterFinancials]) -> dict[str, list]:
-    """Build CCC heatmap series from quarterly financials.
+def heatmap_data(
+    quarters: list[QuarterFinancials], days: float | None = None
+) -> dict[str, list]:
+    """Build CCC heatmap series from period financials.
 
     Args:
-        quarters: Quarterly records ordered oldest → newest.
+        quarters: Period records ordered oldest → newest (quarterly or annual).
+        days: Day-count convention for every period. Defaults to the
+            configured days_per_quarter; pass days_per_year for annual data.
 
     Returns:
-        Dict with parallel lists, ready for a metrics-by-quarters heatmap:
+        Dict with parallel lists, ready for a metrics-by-periods heatmap:
         ``quarters`` (labels), ``dso``, ``dio``, ``dpo``, ``ccc``.
 
     Raises:
@@ -135,9 +139,9 @@ def heatmap_data(quarters: list[QuarterFinancials]) -> dict[str, list]:
     ccc_series: list[float] = []
 
     for q in quarters:
-        q_dso = dso(q.receivables, q.revenue)
-        q_dio = dio(q.inventory, q.cogs)
-        q_dpo = dpo(q.payables, q.cogs)
+        q_dso = dso(q.receivables, q.revenue, days=days)
+        q_dio = dio(q.inventory, q.cogs, days=days)
+        q_dpo = dpo(q.payables, q.cogs, days=days)
         labels.append(q.label)
         dso_series.append(q_dso)
         dio_series.append(q_dio)

@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from screener.config import CONFIG
 from screener.database.models import AnnualData
 from screener.database.repository import AnnualDataRepository, CompanyRepository
-from screener.scraper import client, fetcher
+from screener.scraper import client, fetcher, schedules
 from screener.scraper.parser import CompanyFinancials, FinancialTable, parse_company_financials
 
 logger = logging.getLogger(__name__)
@@ -204,6 +204,7 @@ class CompanyDataService:
         self,
         session: Session,
         fetch_page: Callable[[str], str] | None = None,
+        fetch_json: Callable[[str], str] | None = None,
         config: dict[str, Any] | None = None,
     ) -> None:
         """Wire the service to a DB session and a page fetcher.
@@ -212,10 +213,14 @@ class CompanyDataService:
             session: An open SQLAlchemy session.
             fetch_page: ``url -> html`` callable. Defaults to the fetcher
                 (HTTP → Playwright fallback); injectable for testing.
+            fetch_json: ``url -> body`` callable for the schedules/notes API.
+                Defaults to the HTTP client; pass None-returning stub in tests
+                to skip enrichment.
             config: Override config; defaults to the global CONFIG.
         """
         self._session = session
         self._fetch_page = fetch_page or fetcher.fetch_page
+        self._fetch_json = fetch_json or client.fetch
         self._cfg = (config or CONFIG)["scraper"]
         self._companies = CompanyRepository(session)
         self._annual = AnnualDataRepository(session)
@@ -259,6 +264,7 @@ class CompanyDataService:
         html = self._fetch_page(self._company_url(symbol))
         self.last_html = html
         fin = parse_company_financials(html)
+        schedules.enrich(fin, html, fetch_json=self._fetch_json)
 
         if not needs:
             logger.info("%s is cache-fresh; skipping persistence", symbol)

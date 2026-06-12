@@ -77,7 +77,12 @@ class FinancialTable:
 
 @dataclass
 class CompanyFinancials:
-    """All statements parsed from a single Screener company page."""
+    """All statements parsed from a single Screener company page.
+
+    The ``notes_*`` tables hold granular child rows fetched from Screener's
+    row-expand API (see :mod:`screener.scraper.schedules`); their row labels
+    are ``"<parent> · <child>"``.
+    """
 
     name: str
     symbol: str
@@ -86,6 +91,9 @@ class CompanyFinancials:
     cash_flow: FinancialTable | None = None
     ratios: FinancialTable | None = None
     quarters: FinancialTable | None = None
+    notes_pl: FinancialTable | None = None
+    notes_bs: FinancialTable | None = None
+    notes_cf: FinancialTable | None = None
 
 
 def clean_number(text: str | None) -> float | None:

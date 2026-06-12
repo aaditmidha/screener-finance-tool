@@ -119,6 +119,46 @@ class TestDeterioratingReceivables:
         assert not any("Total Expenses" in a for a in sourcing.approximated)
 
 
+class TestNotesEnrichment:
+    """Expand-API notes must upgrade missing fields to real values."""
+
+    def _enriched(self):
+        import json
+        from screener.scraper import schedules
+
+        page = _STANDARD.replace("<h1>Test Co</h1>",
+                                 '<h1>Test Co</h1><a href="/api/company/1/chart/"></a>')
+        responses = {
+            "Other Assets": {"Trade receivables": {"Mar 2023": "25,424", "Mar 2024": "30,193"}},
+            "Expenses": {"Material Cost %": {"Mar 2023": "55%", "Mar 2024": "54%"},
+                         "Employee Cost %": {"Mar 2023": "15%", "Mar 2024": "16%"},
+                         "Other Cost %": {"Mar 2023": "7%", "Mar 2024": "6%"}},
+        }
+
+        def fetch(url: str) -> str:
+            for parent, payload in responses.items():
+                if parent.replace(" ", "%20") in url:
+                    return json.dumps(payload)
+            return json.dumps({})
+
+        fin = parse_company_financials(page)
+        return from_financials(schedules.enrich(fin, page, fetch_json=fetch))
+
+    def test_receivables_no_longer_missing(self) -> None:
+        sourcing = self._enriched()
+        assert not any("receivable" in m.lower() for m in sourcing.missing)
+
+    def test_dsri_computed_from_notes(self) -> None:
+        # (30193/153670) / (25424/146767) ≈ 1.134 — no longer neutral
+        sourcing = self._enriched()
+        assert sourcing.result.indices.dsri == pytest.approx(1.134, abs=1e-3)
+
+    def test_sga_approximated_from_cost_pct(self) -> None:
+        sourcing = self._enriched()
+        assert not any("SGA" in m for m in sourcing.missing)
+        assert any("cost %" in a for a in sourcing.approximated)
+
+
 class TestInsufficientData:
     def test_single_period_returns_none(self) -> None:
         single = """<html><body><h1>X</h1>

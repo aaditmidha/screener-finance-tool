@@ -2,6 +2,14 @@ scraper:
   base_url: "https://www.screener.in"
   company_url_template: "https://www.screener.in/company/{symbol}/consolidated/"
   search_url_template: "https://www.screener.in/api/company/search/?q={query}"
+  # Row-expand API: returns the granular child rows behind each "+" row.
+  schedules_url_template: "https://www.screener.in/api/company/{company_id}/schedules/?parent={parent}&section={section}&consolidated=true"
+  # Parents expanded per statement when enriching a company (each is one
+  # rate-limited request; keep the list purposeful).
+  schedule_parents:
+    profit-loss: ["Expenses", "Other Income"]
+    balance-sheet: ["Other Assets", "Other Liabilities", "Fixed Assets", "Borrowings", "Reserves"]
+    cash-flow: ["Cash from Operating Activity", "Cash from Investing Activity", "Cash from Financing Activity"]
   request_timeout_seconds: 30
   retry_attempts: 3
   retry_backoff_seconds: 2

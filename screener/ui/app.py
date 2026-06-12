@@ -12,13 +12,12 @@ module is the thin Streamlit shell that wires them together.
 """
 
 import logging
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from screener.config import CONFIG
 from screener.database.engine import build_engine, get_session_factory
-from screener.exporters import excel as excel_exporter
+from screener.exporters import model_workbook
 from screener.exporters.tearsheet import TearsheetInput, generate_tearsheet
 from screener.models import beneish_adapter, custom_screener, pledge_monitor, working_capital as wc
 from screener.models.peer_comparison import PeerComparison
@@ -42,32 +41,15 @@ def _build_service() -> CompanyDataService:
 
 
 def _financials_to_excel_bytes(fin: CompanyFinancials) -> bytes:
-    """Export the parsed statements to an in-memory Excel workbook.
+    """Export the template-style model workbook as in-memory bytes.
 
     Args:
-        fin: Parsed company financials.
+        fin: Parsed (and notes-enriched) company financials.
 
     Returns:
         The workbook contents as bytes (for a Streamlit download button).
     """
-    sheets: dict[str, list[dict[str, Any]]] = {}
-    for name, table in (
-        ("Annual PL", fin.profit_loss),
-        ("Balance Sheet", fin.balance_sheet),
-        ("Cash Flow", fin.cash_flow),
-        ("Ratios", fin.ratios),
-        ("Quarterly", fin.quarters),
-    ):
-        df = components.financial_table_to_df(table)
-        if df.empty:
-            continue
-        sheets[name] = df.reset_index(names="Item").to_dict("records")
-
-    with tempfile.TemporaryDirectory() as tmp:
-        path = excel_exporter.export(sheets, "model.xlsx")
-        # excel_exporter writes to its configured dir; relocate read into tmp-safe read
-        data = Path(path).read_bytes()
-    return data
+    return model_workbook.to_bytes(fin)
 
 
 # --------------------------------------------------------------------------- #
@@ -202,7 +184,8 @@ def _render_wc_heatmap(st: Any, fin: CompanyFinancials) -> None:
     if not quarters:
         st.info("Granular working-capital data not available for this company.")
         return
-    heatmap = wc.heatmap_data(quarters)
+    # Periods here are fiscal years parsed from the annual BS → annual days.
+    heatmap = wc.heatmap_data(quarters, days=CONFIG["working_capital"]["days_per_year"])
     st.plotly_chart(components.build_wc_heatmap_figure(heatmap), use_container_width=True)
 
 

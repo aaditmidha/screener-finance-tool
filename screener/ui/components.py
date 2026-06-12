@@ -108,9 +108,17 @@ def working_capital_quarters(fin: CompanyFinancials) -> list[wc.QuarterFinancial
     if pl is None or bs is None:
         return []
 
-    receivables = bs.row("receivable") or bs.row("debtor")
-    inventory = bs.row("inventor")
-    payables = bs.row("payable")
+    def _bs_row(*needles: str) -> list[float | None] | None:
+        """Look a row up on the balance sheet, falling back to its notes."""
+        for needle in needles:
+            found = bs.row(needle) or (fin.notes_bs.row(needle) if fin.notes_bs else None)
+            if found:
+                return found
+        return None
+
+    receivables = _bs_row("receivable", "debtor")
+    inventory = _bs_row("inventor")
+    payables = _bs_row("payable")
     sales = pl.row("sales") or pl.row("revenue")
     op_profit = pl.row("operating profit")
     if not all([receivables, inventory, payables, sales, op_profit]):

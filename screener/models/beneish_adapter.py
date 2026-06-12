@@ -93,6 +93,8 @@ def from_financials(fin: CompanyFinancials) -> BeneishSourcing | None:
     approximated: list[str] = []
     missing: list[str] = []
 
+    notes_pl, notes_bs = fin.notes_pl, fin.notes_bs
+
     def build_year(idx: int) -> BeneishYear | None:
         """Assemble one BeneishYear from column *idx* (-1 current, -2 prior)."""
         revenue = _first(pl, idx, "sales", "revenue")
@@ -100,9 +102,17 @@ def from_financials(fin: CompanyFinancials) -> BeneishSourcing | None:
         if revenue is None or total_assets is None or total_assets == 0:
             return None
 
-        # COGS: prefer the granular materials line; else the aggregate
-        # Expenses line (gross margin then equals operating margin).
+        # COGS, best first: granular materials line; cost-% splits from the
+        # expand-API notes (Material + Manufacturing % of revenue); aggregate
+        # Expenses (gross margin then equals operating margin).
         cogs = _first(pl, idx, "raw material", "cost of materials")
+        if cogs is None and notes_pl is not None:
+            material_pct = _first(notes_pl, idx, "material cost")
+            if material_pct is not None:
+                manufacturing_pct = _first(notes_pl, idx, "manufacturing cost") or 0.0
+                cogs = (material_pct + manufacturing_pct) / 100.0 * revenue
+                if idx == -1:
+                    approximated.append("COGS ≈ (Material + Manufacturing) cost % × revenue")
         if cogs is None:
             cogs = _first(pl, idx, "expenses")
             if cogs is not None and idx == -1:
@@ -113,6 +123,8 @@ def from_financials(fin: CompanyFinancials) -> BeneishSourcing | None:
                 missing.append("expenses (GMI neutral)")
 
         receivables = _first(bs, idx, "receivable", "debtor")
+        if receivables is None and notes_bs is not None:
+            receivables = _first(notes_bs, idx, "receivable", "debtor")
         if receivables is None:
             receivables = 0.0
             if idx == -1:
@@ -130,6 +142,13 @@ def from_financials(fin: CompanyFinancials) -> BeneishSourcing | None:
         depreciation = _first(pl, idx, "depreciation") or 0.0
 
         sga = _first(pl, idx, "other expenses")
+        if sga is None and notes_pl is not None:
+            employee_pct = _first(notes_pl, idx, "employee cost")
+            other_pct = _first(notes_pl, idx, "other cost")
+            if employee_pct is not None or other_pct is not None:
+                sga = ((employee_pct or 0.0) + (other_pct or 0.0)) / 100.0 * revenue
+                if idx == -1:
+                    approximated.append("SGA ≈ (Employee + Other) cost % × revenue")
         if sga is None:
             sga = 0.0
             if idx == -1:
