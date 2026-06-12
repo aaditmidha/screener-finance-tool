@@ -34,6 +34,14 @@ class CompanyRepository:
         """
         self._session = session
 
+    def all(self) -> list[Company]:
+        """Return every stored company, ordered by symbol.
+
+        Returns:
+            All :class:`Company` rows.
+        """
+        return list(self._session.scalars(select(Company).order_by(Company.symbol)))
+
     def get_by_symbol(self, symbol: str) -> Company | None:
         """Return the company with *symbol*, or None if not stored yet.
 

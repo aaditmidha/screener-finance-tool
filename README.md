@@ -20,9 +20,12 @@ cached in SQLite, and served through a Streamlit dashboard.
 - **Working-capital heatmap** (DSO / DIO / DPO / CCC by period, Plotly)
 - **Peer comparison** — auto-discovers sector peers, ranks by ROCE, ROE, revenue growth and a weighted composite score
 - **AI tearsheet** — a one-page plain-English summary (trends, red flags, peer view, overall view) generated via the **Groq API** (free tier; this project deliberately never uses paid LLM APIs)
-- **Excel export** of all parsed statements; PDF export of tearsheets
+- **Custom formula screener** — define your own metric (e.g. `(pat / revenue) * revenue_growth_3yr`) and rank every downloaded company; formulas are AST-sandboxed (arithmetic only, can never execute code)
+- **Excel export** of all parsed statements; PDF export of tearsheets; **colour-scale CCC heatmap in Excel** (conditional formatting per metric row)
 - **Forensic models**: Beneish M-Score, forward & reverse DCF, earnings quality (CFO/PAT, accruals), capital-allocation score (ROIC vs WACC), cash-conversion cycle
-- **Annual-report downloader** — stealth Playwright fetcher with IR-page → NSE → BSE fallback chain and local PDF cache (local use only)
+- **Promoter pledge risk monitor** — parses pledge history, flags >20%/>40% crossings and rising trends, cross-references crossings with subsequent price drops (India-specific red flag)
+- **Management credibility tracker** — extracts quantified guidance from earnings-call transcripts (Groq), pairs it with delivered actuals, and scores hit-rate + bias 0–10
+- **Annual-report downloader** — stealth Playwright fetcher with IR-page → NSE → BSE fallback chain, rotating user agents, 15s+ randomised BSE delays, and a local PDF cache (local use only)
 
 ## Architecture
 
@@ -88,8 +91,8 @@ Notes for the cloud environment:
 ## Tests & CI
 
 ```bash
-pytest                                   # 252 tests
-pytest --cov=screener --cov-fail-under=70   # coverage gate (currently ~92%)
+pytest                                   # 318 tests
+pytest --cov=screener --cov-fail-under=70   # coverage gate (currently ~93%)
 ```
 
 GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the
@@ -103,9 +106,10 @@ screener/
                  Screener parser, acquisition service, AR downloader
   models/        financial calculations: Beneish, DCF (fwd + reverse),
                  earnings quality, capital allocation, working capital,
-                 peer comparison, ratios
+                 peer comparison, pledge monitor, management credibility,
+                 custom formula screener, ratios
   database/      SQLite layer: ORM models, repositories, 7-day cache
-  exporters/     Excel, PDF, AI tearsheet (Groq)
+  exporters/     Excel, PDF, WC heatmap (colour scales), AI tearsheet (Groq)
   ui/            Streamlit app + pure view helpers
   tests/         pytest suite (fixtures only — no live network calls)
 ```

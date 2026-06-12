@@ -94,6 +94,12 @@ class AnnualReportDownloader:
         self._storage_root = Path(cfg["storage_dir"])
         self._sources = cfg["sources"]
         self._ar_keywords = [kw.lower() for kw in cfg["ar_link_keywords"]]
+        # Rotated per browser context so repeat visits don't share a fingerprint.
+        self._user_agents: list[str] = cfg.get("user_agents") or [cfg["user_agent"]]
+
+    def _pick_user_agent(self) -> str:
+        """Return a randomly chosen user-agent string from the configured pool."""
+        return random.choice(self._user_agents)
 
     # ------------------------------------------------------------------ #
     # Cache helpers
@@ -176,7 +182,7 @@ class AnnualReportDownloader:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
                 try:
-                    context = browser.new_context(user_agent=self._cfg["user_agent"])
+                    context = browser.new_context(user_agent=self._pick_user_agent())
                     context.add_init_script(_STEALTH_INIT_SCRIPT)
                     page = context.new_page()
                     page.goto(url, timeout=self._cfg["download_timeout_ms"],
@@ -213,7 +219,7 @@ class AnnualReportDownloader:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True)
                 try:
-                    context = browser.new_context(user_agent=self._cfg["user_agent"])
+                    context = browser.new_context(user_agent=self._pick_user_agent())
                     context.add_init_script(_STEALTH_INIT_SCRIPT)
                     response = context.request.get(url, timeout=self._cfg["download_timeout_ms"])
                     if not response.ok:

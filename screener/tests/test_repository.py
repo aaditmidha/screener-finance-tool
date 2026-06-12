@@ -74,6 +74,15 @@ def test_upsert_updates_existing(session: Session) -> None:
     assert found.sector == "IT"
 
 
+def test_all_returns_companies_ordered_by_symbol(session: Session) -> None:
+    repo = CompanyRepository(session)
+    repo.upsert("WIPRO", "Wipro")
+    repo.upsert("INFY", "Infosys")
+    repo.upsert("TCS", "TCS")
+    session.commit()
+    assert [c.symbol for c in repo.all()] == ["INFY", "TCS", "WIPRO"]
+
+
 class TestAnnualDataRepository:
     """CRUD and ordering for AnnualData rows."""
 

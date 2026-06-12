@@ -20,6 +20,11 @@ annual_reports:
   download_timeout_ms: 120000           # PDFs are large; allow up to 2 min
   # A real browser fingerprint helps the stealth pass on IR / exchange portals.
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  # Rotated randomly per browser context (BSE fingerprints repeat visitors).
+  user_agents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0"
   # Keywords used to recognise an annual-report link on an IR page.
   ar_link_keywords: ["annual report", "annual-report", "integrated report"]
   # Source priority: tried top to bottom; first hit wins.
@@ -90,6 +95,23 @@ thresholds:
       excellent_min: 8.0
       good_min: 5.0
       mediocre_min: 3.0
+  pledge:
+    warning_pct: 20.0          # promoter pledge above this → elevated risk
+    critical_pct: 40.0         # above this → high risk
+    price_drop_pct: 0.15       # price fall after a crossing that flags an event
+    price_lookahead_periods: 2
+  management_credibility:
+    hit_tolerance: 0.10        # actual within ±10% of guidance counts as delivered
+    bias_cap: 0.50             # |mean deviation| at which the bias component hits 0
+    weights:
+      hit_rate: 0.7
+      bias: 0.3
+    ratings:
+      trustworthy_min: 7.5
+      mixed_min: 5.0
+
+custom_screener:
+  max_formula_length: 200      # guard against pathological expressions
 
 dcf:
   default_discount_rate: 0.12

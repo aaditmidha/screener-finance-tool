@@ -75,6 +75,19 @@ class TestCache:
         assert downloader.find_cached("INFY", 2024) is None
 
 
+class TestUserAgentRotation:
+    def test_picks_from_configured_pool(self, downloader: AnnualReportDownloader) -> None:
+        pool = set(downloader._user_agents)
+        assert len(pool) >= 1
+        for _ in range(10):
+            assert downloader._pick_user_agent() in pool
+
+    def test_falls_back_to_single_ua(self, cfg: dict) -> None:
+        cfg["annual_reports"].pop("user_agents", None)
+        d = AnnualReportDownloader(config=cfg)
+        assert d._user_agents == [cfg["annual_reports"]["user_agent"]]
+
+
 class TestDelays:
     def test_bse_delay_is_at_least_15s(self, downloader: AnnualReportDownloader) -> None:
         """BSE is the aggressive blocker — its min delay must be ≥ 15s."""

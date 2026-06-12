@@ -20,7 +20,7 @@ from screener.config import CONFIG
 from screener.database.engine import build_engine, get_session_factory
 from screener.exporters import excel as excel_exporter
 from screener.exporters.tearsheet import TearsheetInput, generate_tearsheet
-from screener.models import working_capital as wc
+from screener.models import custom_screener, working_capital as wc
 from screener.models.peer_comparison import PeerComparison
 from screener.scraper.acquisition import CompanyDataService, search_companies
 from screener.scraper.parser import CompanyFinancials
@@ -127,6 +127,31 @@ def _render_tearsheet_tab(
         st.error(f"Tearsheet generation failed: {exc}")
 
 
+def _render_screener_tab(st: Any, service: CompanyDataService) -> None:
+    """Render the custom-formula screener over all persisted companies."""
+    st.caption(
+        "Rank every downloaded company by your own formula, e.g. "
+        "`(pat / revenue) * revenue_growth_3yr`. Variables: revenue, pat, ebit, "
+        "equity, debt, eps, total_assets, roe, roce, debt_to_equity, pat_margin, "
+        "ebit_margin, revenue_growth_3yr, pat_growth_3yr."
+    )
+    formula = st.text_input("Formula", value="roce * revenue_growth_3yr", key="formula")
+    if not st.button("Run screen", key="screen_btn"):
+        return
+    companies = {
+        c.symbol: service._annual.for_company(c.id) for c in service._companies.all()
+    }
+    companies = {sym: rows for sym, rows in companies.items() if rows}
+    if not companies:
+        st.info("No companies in the database yet — analyse a few first.")
+        return
+    try:
+        ranked = custom_screener.screen(companies, formula)
+        st.dataframe(ranked, use_container_width=True)
+    except (custom_screener.FormulaError, ValueError) as exc:
+        st.error(str(exc))
+
+
 def _render_beneish(st: Any, fin: CompanyFinancials) -> None:
     """Render the Beneish M-Score metric with a red/green flag."""
     # Beneish needs granular inputs Screener often omits; degrade to N/A.
@@ -203,8 +228,8 @@ def main() -> None:
     )
 
     # --- Tabs ------------------------------------------------------------- #
-    annual, quarterly, ratios, peers, tearsheet = st.tabs(
-        ["Annual", "Quarterly", "Ratios", "Peer Compare", "Tearsheet"]
+    annual, quarterly, ratios, peers, tearsheet, screener_tab = st.tabs(
+        ["Annual", "Quarterly", "Ratios", "Peer Compare", "Tearsheet", "Custom Screener"]
     )
     with annual:
         _render_statement_tab(st, "annual P&L", fin.profit_loss)
@@ -218,6 +243,8 @@ def main() -> None:
         _render_peer_tab(st, service, symbol)
     with tearsheet:
         _render_tearsheet_tab(st, symbol, name or fin.name, metrics={})
+    with screener_tab:
+        _render_screener_tab(st, service)
 
 
 if __name__ == "__main__":
