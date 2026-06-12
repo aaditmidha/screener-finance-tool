@@ -1,0 +1,10 @@
+# Streamlit app configuration (safe to commit — no secrets here).
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#27ae60"

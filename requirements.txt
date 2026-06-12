@@ -1,0 +1,29 @@
+# Runtime dependencies — pinned for Streamlit Community Cloud.
+# Dev/test extras (pytest, playwright, coverage) live in requirements-dev.txt.
+
+# Scraping
+requests==2.34.2
+beautifulsoup4==4.15.0
+lxml==6.1.1
+
+# Database
+SQLAlchemy==2.0.50
+
+# Data processing
+pandas==3.0.3
+numpy==2.4.6
+
+# Config & secrets
+PyYAML==6.0.3
+python-dotenv==1.2.2
+
+# UI
+streamlit==1.58.0
+plotly==6.8.0
+
+# Exporters
+openpyxl==3.1.5
+reportlab==4.5.1
+
+# LLM (Groq free tier — project policy: never the Anthropic API)
+groq==1.4.0

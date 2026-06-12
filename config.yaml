@@ -1,0 +1,140 @@
+scraper:
+  base_url: "https://www.screener.in"
+  company_url_template: "https://www.screener.in/company/{symbol}/consolidated/"
+  search_url_template: "https://www.screener.in/api/company/search/?q={query}"
+  request_timeout_seconds: 30
+  retry_attempts: 3
+  retry_backoff_seconds: 2
+  rate_limit_delay_seconds: 1.5
+  user_agent: "Mozilla/5.0 (compatible; ScreenerFinanceTool/1.0)"
+  retry_backoff_max_seconds: 30    # cap for exponential backoff
+  playwright:
+    enabled: true
+    headless: true
+    nav_timeout_ms: 30000
+    # HTTP status codes that should trigger the Playwright fallback
+    fallback_status_codes: [403, 429, 503]
+
+annual_reports:
+  storage_dir: "data/annual_reports"   # PDFs saved as <storage_dir>/<symbol>/<year>/<filename>
+  download_timeout_ms: 120000           # PDFs are large; allow up to 2 min
+  # A real browser fingerprint helps the stealth pass on IR / exchange portals.
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  # Keywords used to recognise an annual-report link on an IR page.
+  ar_link_keywords: ["annual report", "annual-report", "integrated report"]
+  # Source priority: tried top to bottom; first hit wins.
+  sources:
+    ir_page:
+      enabled: true
+      # Common paths appended to a company domain when the IR URL is unknown.
+      candidate_paths: ["/investor-relations", "/investors", "/financials", "/annual-reports"]
+      min_delay_seconds: 3
+      max_delay_seconds: 6
+    nse:
+      enabled: true
+      base_url: "https://www.nseindia.com"
+      annual_reports_api: "https://www.nseindia.com/api/annual-reports?index=equities&symbol={symbol}"
+      min_delay_seconds: 5
+      max_delay_seconds: 10
+    bse:
+      enabled: true
+      base_url: "https://www.bseindia.com"
+      # BSE is the most aggressive blocker — keep delays long and randomised.
+      min_delay_seconds: 15
+      max_delay_seconds: 25
+
+database:
+  path: "data/screener.db"
+  echo_sql: false
+
+cache:
+  max_age_days: 7          # re-scrape only if stored data is older than this
+
+date_ranges:
+  default_years_history: 10
+  min_years_for_analysis: 3
+  fiscal_year_end_month: 3  # March (Indian FY)
+
+thresholds:
+  beneish_m_score:
+    manipulation_cutoff: -1.78   # above this → likely manipulator
+    grey_zone_lower: -2.22
+    grey_zone_upper: -1.78
+  piotroski_f_score:
+    strong_min: 7
+    weak_max: 2
+  altman_z_score:
+    distress_max: 1.81
+    grey_zone_upper: 2.99        # between distress_max and this → grey zone
+  pe_ratio:
+    max_reasonable: 150
+  debt_to_equity:
+    high_threshold: 2.0
+  roe:
+    excellent_min: 0.20
+    acceptable_min: 0.10
+  roce:
+    excellent_min: 0.20
+    acceptable_min: 0.12
+  earnings_quality:
+    cfo_pat_min: 0.8           # avg CFO/PAT below this → low cash conversion flag
+    accrual_ratio_max: 0.10    # latest accrual ratio above this → high accruals flag
+    divergence_growth_gap: 0.10  # PAT CAGR exceeding CFO CAGR by more → divergence flag
+  capital_allocation:
+    excellent_spread: 0.05     # ROIC−WACC spread that earns full marks
+    weights:                   # score components, must sum to 10
+      avg_spread: 4.0
+      consistency: 3.0
+      trend: 3.0
+    ratings:
+      excellent_min: 8.0
+      good_min: 5.0
+      mediocre_min: 3.0
+
+dcf:
+  default_discount_rate: 0.12
+  default_terminal_growth_rate: 0.04
+  default_projection_years: 10
+  margin_of_safety: 0.25
+  reverse:
+    growth_lower_bound: -0.50   # bisection search window for implied growth
+    growth_upper_bound: 1.00
+    price_tolerance: 0.001      # converged when |model−market| ≤ price × this
+    max_iterations: 100
+
+working_capital:
+  days_per_quarter: 91
+  days_per_year: 365
+
+peer_comparison:
+  max_peers: 8                 # cap on discovered peers (excluding the base co.)
+  revenue_growth_years: 3      # window for the revenue CAGR metric
+  composite_weights:           # must sum to 1.0; higher metric value = better
+    roce: 0.35
+    roe: 0.25
+    revenue_growth: 0.40
+
+exporters:
+  excel:
+    output_dir: "exports/excel"
+    date_format: "%Y-%m-%d"
+  pdf:
+    output_dir: "exports/pdf"
+    font: "Helvetica"
+    logo_path: null
+  tearsheet:
+    output_dir: "exports/tearsheets"
+
+llm:
+  provider: "groq"                 # project rule: Groq only, never Anthropic/Claude
+  model: "llama-3.3-70b-versatile"
+  api_key_env: "GROQ_API_KEY"      # key read from this env var, never hardcoded
+  temperature: 0.3
+  max_tokens: 1200
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+  file: "logs/screener.log"
+  max_bytes: 10485760   # 10 MB
+  backup_count: 5
