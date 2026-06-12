@@ -32,10 +32,24 @@ minus. Calls, attributes, subscripts, comparisons, strings and everything else
 raise `FormulaError` before evaluation. Evaluation walks the validated tree —
 no `eval()`, no `exec()`, ever.
 
-**Why:** A formula box is a code-injection surface. `eval()` with a filtered
-namespace is still escapable via dunder chains (`().__class__...`). The AST
-whitelist makes the attack surface enumerable: anything not explicitly allowed
-is rejected, which is testable (see `TestFormulaSecurity`) and reviewable.
+**Why:** A formula box is a code-injection surface, and `eval()` cannot be
+made safe by restricting its namespace. Even with `{"__builtins__": {}}`,
+Python attribute access lets an expression walk the class hierarchy back to
+anything in the interpreter:
+
+```python
+().__class__.__bases__[0].__subclasses__()
+# tuple → object → every loaded class, including os._wrap_close → os.system
+```
+
+No namespace filtering stops that, because the escape route is *attribute
+access on a literal*, not a name lookup. AST validation closes it
+structurally: we whitelist node types (numeric constants, `Name`, the five
+arithmetic operators, unary minus) and reject everything else — `Attribute`,
+`Call`, `Subscript`, comparisons, strings — at the syntax-tree level, before
+any evaluation happens. The attack surface becomes enumerable and is pinned by
+tests (`TestFormulaSecurity` asserts each escape pattern raises
+`FormulaError`).
 
 ## 4. Screener.in scraping over the NSE/BSE APIs
 
@@ -96,10 +110,18 @@ Beneish is a probabilistic red flag (the published model misclassifies a
 material share of firms even on exact COMPUSTAT inputs), not a precise
 measurement. Directional inputs preserve the signal: ballooning receivables,
 accruals diverging from cash, leverage building. The rules we hold ourselves
-to: (a) a missing field neutralises **only its own index** at 1.0 rather than
-silently zeroing the score; (b) every approximation and gap is surfaced in
-`BeneishSourcing` and shown in the UI as a disclosure caption. An honest
-approximate flag beats a hidden "unavailable".
+to: (a) a missing field neutralises **only its own index** at 1.0 — for a
+year-over-year index, 1.0 *is* the statistically neutral "no change"
+assumption (e.g. DSRI = 1.0 means receivable days unchanged), not a made-up
+number — rather than silently zeroing the score; (b) every approximation and
+gap is surfaced in `BeneishSourcing` and shown in the UI as a disclosure
+caption. An honest approximate flag beats a hidden "unavailable".
+
+**Upgrade path:** MCA's XBRL filings expose exact receivables and SGA as
+structured XML with no bot protection, which would un-neutralise DSRI/SGAI.
+Filing quality is uneven below the large-caps, so the planned integration is
+scoped to roughly the top 200 companies by market cap, falling back to the
+current approximations elsewhere.
 
 ## 8. Concall transcript source for the credibility tracker
 
