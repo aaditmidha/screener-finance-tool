@@ -72,6 +72,9 @@ class TearsheetInput:
     metrics: dict[str, Any] = field(default_factory=dict)
     peer_ranking: pd.DataFrame | None = None
     ar_context: dict[str, Any] = field(default_factory=dict)   # exact Annual-Report data
+    periods: list[str] = field(default_factory=list)           # key-financials columns
+    key_financials: list[tuple[str, list, str]] = field(default_factory=list)
+    chart_pngs: list[tuple[str, bytes]] = field(default_factory=list)  # (title, PNG bytes)
 
     @property
     def ar_enhanced(self) -> bool:
@@ -233,9 +236,13 @@ def to_pdf(
     Returns:
         Path to the written PDF.
     """
+    import io
+
+    from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+    from reportlab.lib.units import inch
+    from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     directory = out_dir or Path(CONFIG["exporters"]["tearsheet"]["output_dir"])
     directory.mkdir(parents=True, exist_ok=True)
@@ -248,18 +255,55 @@ def to_pdf(
     )
     story: list[Any] = [
         Paragraph(f"{data.name} ({data.symbol}) — Investment Tearsheet", styles["Title"]),
-        Spacer(1, 12),
     ]
+    if data.metrics.get("Forensic score"):
+        story.append(Paragraph(f"Forensic health: {data.metrics['Forensic score']}",
+                               styles["Heading3"]))
+    story.append(Spacer(1, 10))
+
     for block in summary.split("\n\n"):
         block = block.strip()
         if not block:
             continue
         safe = _html.escape(block).replace("\n", "<br/>")
         story.append(Paragraph(safe, styles["BodyText"]))
+        story.append(Spacer(1, 6))
+
+    # Key financials table.
+    if data.key_financials and data.periods:
+        story.append(Spacer(1, 6))
+        story.append(Paragraph("Key financials", styles["Heading3"]))
+        header = ["Metric", *data.periods]
+        table_rows = [header]
+        for label, values, fmt in data.key_financials:
+            cells = [label]
+            for v in values:
+                if v is None:
+                    cells.append("—")
+                elif fmt == "pct":
+                    cells.append(f"{v * 100:.1f}%")
+                else:
+                    cells.append(f"{v:,.0f}")
+            table_rows.append(cells)
+        tbl = Table(table_rows, hAlign="LEFT")
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#106B5E")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f6f5")]),
+        ]))
+        story.append(tbl)
+
+    # Embedded focus charts.
+    for chart_title, png in data.chart_pngs:
         story.append(Spacer(1, 8))
+        story.append(Paragraph(chart_title, styles["Heading4"]))
+        story.append(Image(io.BytesIO(png), width=5.0 * inch, height=2.5 * inch))
 
     doc.build(story)
-    logger.info("Tearsheet PDF written: %s", path)
+    logger.info("Tearsheet PDF written: %s (%d charts)", path, len(data.chart_pngs))
     return path
 
 

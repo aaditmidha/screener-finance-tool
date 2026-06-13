@@ -382,14 +382,30 @@ def _render_operational_tab(st: Any, fin: CompanyFinancials) -> None:
 def _build_tearsheet_input(
     symbol: str, name: str, fin: CompanyFinancials, pledge_history: list, ar_pair: tuple
 ) -> TearsheetInput:
-    """Assemble a rich tearsheet input from the computed forensic signals."""
+    """Assemble a rich tearsheet input: forensic signals, financial trend,
+    operational metrics, exact AR context, plus a key-financials table and
+    embedded focus charts for the PDF."""
+    from screener.exporters import research_note
+    from screener.models import operational
+
     score = forensic_score.compute(fin, pledge_history=pledge_history or None)
-    metrics: dict[str, Any] = {
-        "forensic_score": f"{score.score:.0f}/100 ({score.verdict})",
-    }
+    metrics: dict[str, Any] = {"Forensic score": f"{score.score:.0f}/100 ({score.verdict})"}
     for comp in score.components:
         if comp.available:
             metrics[comp.name] = comp.detail
+
+    # Latest operational efficiency snapshot → richer narrative.
+    for m in operational.compute(fin).metrics:
+        if m.values and m.values[-1] is not None:
+            metrics[m.label] = components._format_operational(m.values[-1], m.fmt)
+
+    # Full financial trend (oldest → newest) so the model writes from real data.
+    periods, fin_rows = research_note.key_financials(fin)
+    financials: dict[str, Any] = {}
+    for label, values, fmt in fin_rows:
+        rendered = ["—" if v is None else (f"{v*100:.1f}%" if fmt == "pct" else f"{v:,.0f}")
+                    for v in values]
+        financials[label] = ", ".join(rendered)
 
     ar_context: dict[str, Any] = {}
     ar_current, _ar_prior = ar_pair
@@ -408,7 +424,12 @@ def _build_tearsheet_input(
                 ar_context["Key risks"] = ", ".join(json.loads(risks)[:3])
             except (json.JSONDecodeError, TypeError):
                 pass
-    return TearsheetInput(symbol=symbol, name=name, metrics=metrics, ar_context=ar_context)
+
+    return TearsheetInput(
+        symbol=symbol, name=name, financials=financials, metrics=metrics,
+        ar_context=ar_context, periods=periods, key_financials=fin_rows,
+        chart_pngs=research_note.focus_charts(periods, fin_rows),
+    )
 
 
 def _render_tearsheet_tab(
