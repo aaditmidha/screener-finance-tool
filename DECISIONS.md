@@ -306,3 +306,24 @@ and populates the DB; the 🧾/🎙 tabs and AR-upgraded Beneish then read that 
 wherever the DB is present. This keeps the cloud deploy light and reliable
 while the heavy/blocked-prone acquisition happens on a residential IP. The DB
 is the contract between the two halves.
+
+## 18. Accuracy audit (live verification)
+
+**Method:** every analytical model was run on live data for two well-understood
+companies and checked against their known real-world profiles, not just unit
+fixtures.
+
+**Result — accurate.** Infosys computed to EBITDA/EBIT/PAT margins of
+23.7%/20.9%/16.5%, ROCE/ROE ~37%/32%, DSO ~72 days, CFO/PAT 1.15x, Beneish
+-2.53 (non-manipulator), forensic 100/100 — all consistent with a top-tier IT
+compounder. CG Power computed to ~13% EBITDA margin, normalising ROCE/ROE, DSO
+~86 days, CFO/PAT 0.59x, Beneish -2.02 (grey zone), forensic 66/100 (watch) —
+consistent with a capex-heavy turnaround. No formula bugs were found; the
+Beneish 8-factor coefficients, DCF, earnings-quality CAGR, capital-allocation
+WACC, working-capital day-counts, return ratios and composite normalisations
+all verified correct.
+
+**Fix from the audit:** the Beneish index-neutralisation logs (fired routinely
+on the aggregated Screener page, where some inputs are absent by design) were
+downgraded from WARNING to DEBUG — the degradation is expected and already
+disclosed in the UI, so it shouldn't spam logs.
