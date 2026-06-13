@@ -27,3 +27,7 @@ reportlab==4.5.1
 
 # LLM (Groq free tier — project policy: never the Anthropic API)
 groq==1.4.0
+
+# Research-note generation (Word doc + focus charts)
+python-docx==1.1.2
+matplotlib==3.9.2

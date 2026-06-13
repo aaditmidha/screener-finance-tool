@@ -296,6 +296,38 @@ def _render_annual_reports_tab(st: Any, service: CompanyDataService, symbol: str
         ), use_container_width=True)
 
 
+def _render_research_note_tab(st: Any, fin: CompanyFinancials, symbol: str,
+                              name: str, pledge_history: list) -> None:
+    """Generate and download a one-page research note (.docx)."""
+    from screener.exporters import research_note
+
+    st.caption("Generates a one-page research note (Word .docx): thesis sections (Groq), "
+               "a Key Financials table and focus charts. Set `GROQ_API_KEY` for the "
+               "written sections; the tables and charts render without it.")
+    if not st.button("Generate research note", key="note_btn", type="primary"):
+        return
+    score = forensic_score.compute(fin, pledge_history=pledge_history or None)
+    metrics = {c.name: c.detail for c in score.components if c.available}
+    metrics["Forensic score"] = f"{score.score:.0f}/100 ({score.verdict})"
+
+    with st.spinner("Writing note…"):
+        note = research_note.generate(fin, name, symbol, metrics=metrics)
+        docx_bytes = research_note.to_docx(note)
+
+    if note.sections:
+        for section in note.sections:
+            st.markdown(f"**{section.heading}**")
+            st.write(section.body)
+    else:
+        st.info("LLM sections unavailable (no GROQ_API_KEY) — the note still includes "
+                "the Key Financials table and focus charts.")
+    st.download_button(
+        "⬇ Download research note (.docx)", data=docx_bytes,
+        file_name=f"{symbol}_research_note.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+
 def _render_management_tab(st: Any, service: CompanyDataService, symbol: str,
                            ar_rows: list, annual_rows: list) -> None:
     """Render the management-credibility scorecard (guidance vs delivery)."""
@@ -582,10 +614,10 @@ def main() -> None:
     )
 
     # --- Tabs ------------------------------------------------------------- #
-    (upload, annual, quarterly, ratios, operational_tab, peers, tearsheet,
+    (upload, annual, quarterly, ratios, operational_tab, peers, tearsheet, note_tab,
      screener_tab, pledge, annual_reports, management) = st.tabs(
         ["📤 Upload & Analyze", "Annual", "Quarterly", "Ratios", "Operational Data",
-         "Peer Compare", "Tearsheet", "Custom Screener", "🚨 Pledge",
+         "Peer Compare", "Tearsheet", "📝 Research Note", "Custom Screener", "🚨 Pledge",
          "🧾 Annual Reports", "🎙 Management"]
     )
     with upload:
@@ -605,6 +637,8 @@ def main() -> None:
     with tearsheet:
         _render_tearsheet_tab(st, _build_tearsheet_input(symbol, name or fin.name, fin,
                                                           pledge_history, ar_pair))
+    with note_tab:
+        _render_research_note_tab(st, fin, symbol, name or fin.name, pledge_history)
     with screener_tab:
         _render_screener_tab(st, service)
     with pledge:
