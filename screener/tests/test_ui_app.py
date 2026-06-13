@@ -26,6 +26,6 @@ def test_module_imports_without_running_streamlit() -> None:
 def test_financials_to_excel_bytes_produces_xlsx() -> None:
     """The Excel-export helper must yield a valid .xlsx byte string."""
     fin = parse_company_financials(_PAGE)
-    data = app._financials_to_excel_bytes(fin)
+    data = app._financials_to_excel_bytes(fin, ar_rows=[], annual_rows=[])
     # .xlsx files are zip archives — they start with the PK signature.
     assert data[:2] == b"PK"

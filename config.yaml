@@ -131,6 +131,10 @@ thresholds:
 custom_screener:
   max_formula_length: 200      # guard against pathological expressions
 
+discrepancy:
+  moderate_pct: 0.05    # |Screener−AR| / Screener above this → moderate (amber)
+  large_pct: 0.20       # above this → large (red); may signal restatement
+
 forensic_score:
   # Component weights (renormalised over whichever components have data).
   weights:

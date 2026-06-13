@@ -47,16 +47,18 @@ def _build_service() -> CompanyDataService:
     return CompanyDataService(session)
 
 
-def _financials_to_excel_bytes(fin: CompanyFinancials) -> bytes:
+def _financials_to_excel_bytes(fin: CompanyFinancials, ar_rows: list, annual_rows: list) -> bytes:
     """Export the template-style model workbook as in-memory bytes.
 
     Args:
         fin: Parsed (and notes-enriched) company financials.
+        ar_rows: AR-extracted rows (adds AR sheets when present).
+        annual_rows: Stored annual rows (enables the discrepancy sheet).
 
     Returns:
         The workbook contents as bytes (for a Streamlit download button).
     """
-    return model_workbook.to_bytes(fin)
+    return model_workbook.to_bytes(fin, ar_rows=ar_rows or None, annual_rows=annual_rows or None)
 
 
 # --------------------------------------------------------------------------- #
@@ -99,6 +101,62 @@ def _render_peer_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
         progress.empty()
         logger.exception("Peer comparison failed")
         st.error(f"Peer comparison failed: {exc}")
+
+
+def _render_annual_reports_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
+    """Surface AR-extracted data: exact figures, discrepancy, guidance, risks."""
+    import pandas as pd
+
+    from screener.models import ar_insights
+
+    company = service._companies.get_by_symbol(symbol)
+    ar_rows = service._ar.for_company(company.id) if company else []
+    if not ar_rows:
+        st.info(
+            "No Annual-Report data extracted yet. The AR pipeline runs **locally** "
+            "(Playwright + Groq) — run it to populate exact figures, then they "
+            "appear here and upgrade the Beneish score. See the README."
+        )
+        return
+
+    annual_rows = service._annual.for_company(company.id)
+    revenue_by_year = {r.fiscal_year_end.year: r.revenue for r in annual_rows if r.revenue}
+
+    st.caption("Exact figures parsed from the company's annual reports.")
+    exact = {
+        label: [getattr(r, attr, None) for r in ar_rows]
+        for label, attr in [("Revenue", "revenue"), ("PAT", "pat"), ("CFO", "cfo"),
+                            ("Trade receivables", "trade_receivables"),
+                            ("Total assets", "total_assets"), ("Total debt", "total_debt")]
+    }
+    years = [str(r.fiscal_year) for r in ar_rows]
+    st.dataframe(pd.DataFrame(exact, index=years).T, use_container_width=True)
+
+    cells = ar_insights.discrepancies(ar_rows, annual_rows)
+    worst = ar_insights.worst_discrepancies(cells)
+    if any(c.severity == "large" for c in worst):
+        st.error("⚠️ Large Screener-vs-AR discrepancy on a key metric — verify before relying on it.")
+    if cells:
+        st.subheader("Screener vs Annual Report")
+        st.dataframe(pd.DataFrame(
+            [{"Metric": c.metric, "Year": c.year, "Screener": c.screener,
+              "AR": c.ar, "Diff %": None if c.diff_pct is None else round(c.diff_pct * 100, 1),
+              "Severity": c.severity} for c in cells]
+        ), use_container_width=True)
+
+    scorecard = ar_insights.guidance_scorecard(ar_rows, revenue_by_year)
+    if scorecard is not None:
+        st.subheader("Management guidance vs delivery")
+        st.metric("Credibility score", f"{scorecard.score:.1f}/10",
+                  help=f"hit rate {scorecard.hit_rate:.0%}, bias {scorecard.bias:+.0%}")
+
+    timeline = ar_insights.risk_timeline(ar_rows)
+    if timeline:
+        st.subheader("Key-risk timeline")
+        st.dataframe(pd.DataFrame(
+            [{"Risk": e.risk, "First": e.first_year, "Last": e.last_year,
+              "Times mentioned": e.frequency} for e in timeline]
+        ), use_container_width=True)
 
 
 def _render_operational_tab(st: Any, fin: CompanyFinancials) -> None:
@@ -299,17 +357,21 @@ def main() -> None:
         _render_wc_heatmap(st, fin)
 
     # --- Excel download --------------------------------------------------- #
+    company = service._companies.get_by_symbol(symbol)
+    ar_rows = service._ar.for_company(company.id) if company else []
+    annual_rows = service._annual.for_company(company.id) if company else []
     st.download_button(
         "Download Excel model",
-        data=_financials_to_excel_bytes(fin),
+        data=_financials_to_excel_bytes(fin, ar_rows, annual_rows),
         file_name=f"{symbol}_model.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
     # --- Tabs ------------------------------------------------------------- #
-    annual, quarterly, ratios, operational_tab, peers, tearsheet, screener_tab, pledge = st.tabs(
+    (annual, quarterly, ratios, operational_tab, peers, tearsheet,
+     screener_tab, pledge, annual_reports) = st.tabs(
         ["Annual", "Quarterly", "Ratios", "Operational Data", "Peer Compare",
-         "Tearsheet", "Custom Screener", "🚨 Pledge"]
+         "Tearsheet", "Custom Screener", "🚨 Pledge", "🧾 Annual Reports"]
     )
     with annual:
         _render_statement_tab(st, "annual P&L", fin.profit_loss)
@@ -329,6 +391,8 @@ def main() -> None:
         _render_screener_tab(st, service)
     with pledge:
         _render_pledge_tab(st, service)
+    with annual_reports:
+        _render_annual_reports_tab(st, service, symbol)
 
 
 if __name__ == "__main__":
