@@ -53,18 +53,18 @@ def extract_text(pdf_path: str | Path) -> ExtractedPdf:
     if not path.exists():
         raise FileNotFoundError(f"PDF not found: {path}")
 
-    import pdfplumber  # local import — dev/local-only dependency
+    import pdfplumber  # local import — heavy optional dependency
 
     result = ExtractedPdf()
     with pdfplumber.open(str(path)) as pdf:
         result.page_count = len(pdf.pages)
         for i, page in enumerate(pdf.pages, start=1):
+            # Text only — page.extract_tables() is expensive and nothing
+            # downstream uses it; skipping it keeps large ARs within the
+            # hosted app's memory/time budget.
             text = page.extract_text(x_tolerance=3, y_tolerance=3)
             if text:
                 result.pages[i] = text
-            tables = page.extract_tables()
-            if tables:
-                result.tables[i] = tables
     logger.info("Extracted %d/%d text pages from %s", len(result.pages), result.page_count, path.name)
     return result
 
