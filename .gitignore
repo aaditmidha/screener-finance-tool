@@ -35,6 +35,11 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Scratch / scratch-run artifacts (root-anchored)
+/_*.py
+/_*.log
+/_*.txt
+
 # Playwright
 playwright/.auth/
 
