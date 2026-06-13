@@ -134,6 +134,13 @@ thresholds:
 custom_screener:
   max_formula_length: 200      # guard against pathological expressions
 
+uploads:
+  # User-supplied PDFs drive the AR/quarterly/concall analysis (scraping ARs
+  # off exchange portals is unreliable, so the user provides the documents).
+  max_annual_reports: 9
+  max_quarterly: 12
+  max_concalls: 8
+
 discrepancy:
   moderate_pct: 0.05    # |Screener−AR| / Screener above this → moderate (amber)
   large_pct: 0.20       # above this → large (red); may signal restatement

@@ -10,7 +10,6 @@ The downloader and parser are injected, so the orchestration is unit-tested
 without real PDFs, a browser, or the Groq API.
 """
 
-import json
 import logging
 from collections.abc import Iterable
 from typing import Any, Callable
@@ -27,13 +26,8 @@ logger = logging.getLogger(__name__)
 
 _cfg = CONFIG["annual_report_extraction"]
 
-# Extraction-dict guidance keys → ARExtractedData columns.
-_GUIDANCE_MAP = {
-    "revenue_growth_pct": "guided_revenue_growth",
-    "margin_pct": "guided_margin",
-    "capex_amount": "guided_capex",
-    "raw_text": "guidance_raw_text",
-}
+# Re-exported from ar_parser (kept here for backwards-compatible imports).
+flatten_extraction = ar_parser.flatten_extraction
 
 
 def recent_years(count: int, end_year: int) -> list[int]:
@@ -48,38 +42,6 @@ def recent_years(count: int, end_year: int) -> list[int]:
         Ascending list of years, e.g. recent_years(3, 2026) → [2024, 2025, 2026].
     """
     return list(range(end_year - count + 1, end_year + 1))
-
-
-def flatten_extraction(data: dict[str, Any]) -> dict[str, Any]:
-    """Flatten an extraction result into ARExtractedData column kwargs.
-
-    Args:
-        data: Extraction dict from :mod:`ar_parser` (nested financials/guidance).
-
-    Returns:
-        Flat mapping of column name → value, ready for the repository upsert.
-        ``key_risks`` and ``pages_used`` are JSON-encoded.
-    """
-    flat: dict[str, Any] = {}
-    financials = data.get("financials", {}) or {}
-    for field in ar_parser.FINANCIAL_FIELDS:
-        if financials.get(field) is not None:
-            flat[field] = financials[field]
-
-    guidance = data.get("guidance", {}) or {}
-    for src_key, col in _GUIDANCE_MAP.items():
-        if guidance.get(src_key) is not None:
-            flat[col] = guidance[src_key]
-
-    if data.get("key_risks"):
-        flat["key_risks"] = json.dumps(data["key_risks"])
-    if data.get("confidence"):
-        flat["extraction_confidence"] = data["confidence"]
-    if data.get("pages_used"):
-        flat["pages_used"] = json.dumps(data["pages_used"])
-    if data.get("unit"):
-        flat["unit"] = data["unit"]
-    return flat
 
 
 class ARPipeline:
