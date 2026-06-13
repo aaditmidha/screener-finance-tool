@@ -175,6 +175,71 @@ def _render_peer_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
         st.error(f"Peer comparison failed: {exc}")
 
 
+def _stage_uploads(ar_files: list, q_files: list, c_files: list) -> list:
+    """Write uploaded files to a temp dir and build UploadedDoc records."""
+    import os
+    import tempfile
+    from datetime import datetime
+
+    from screener.scraper.document_ingest import (
+        ANNUAL, CONCALL, QUARTERLY, UploadedDoc, infer_fiscal_year,
+    )
+
+    limits = CONFIG["uploads"]
+    current_fy = datetime.now().year
+    tmpdir = tempfile.mkdtemp(prefix="screener_upload_")
+    docs: list = []
+    plan = [
+        (ar_files, ANNUAL, limits["max_annual_reports"]),
+        (q_files, QUARTERLY, limits["max_quarterly"]),
+        (c_files, CONCALL, limits["max_concalls"]),
+    ]
+    for files, kind, limit in plan:
+        for f in (files or [])[:limit]:
+            path = os.path.join(tmpdir, f.name)
+            with open(path, "wb") as out:
+                out.write(f.getbuffer())
+            year = infer_fiscal_year(f.name, default=current_fy)
+            docs.append(UploadedDoc(kind=kind, fiscal_year=year, pdf_path=path, name=f.name))
+    return docs
+
+
+def _render_upload_tab(st: Any, service: CompanyDataService, symbol: str, name: str) -> None:
+    """Upload ARs / quarterlies / concalls; extract and update the analysis."""
+    from screener.scraper import document_ingest
+
+    limits = CONFIG["uploads"]
+    st.caption("Upload the company's own PDFs — they drive the AR-enhanced Beneish, "
+               "the 🧾 Annual Reports and 🎙 Management tabs. Name files with the year "
+               "(e.g. `AR_FY24.pdf`, `Q1FY26.pdf`) so they're tagged correctly. "
+               "Extraction uses Groq (set `GROQ_API_KEY`) with a regex fallback.")
+    ar_files = st.file_uploader(f"📄 Annual reports (up to {limits['max_annual_reports']})",
+                                type="pdf", accept_multiple_files=True, key="up_ar")
+    q_files = st.file_uploader(f"📊 Quarterly filings (up to {limits['max_quarterly']})",
+                               type="pdf", accept_multiple_files=True, key="up_q")
+    c_files = st.file_uploader(f"🎙 Concall transcripts (up to {limits['max_concalls']})",
+                               type="pdf", accept_multiple_files=True, key="up_c")
+
+    if not st.button("Extract & update analysis", key="ingest_btn", type="primary"):
+        return
+    docs = _stage_uploads(ar_files, q_files, c_files)
+    if not docs:
+        st.warning("Upload at least one PDF first.")
+        return
+
+    import pandas as pd
+    with st.status(f"Extracting {len(docs)} document(s)…", expanded=True) as status:
+        results = document_ingest.ingest(service._session, symbol, docs, company_name=name)
+        for r in results:
+            status.write(f"{r['kind']} · {r['name']} → {r['status']}")
+        ok = sum(1 for r in results if r["status"] == "ingested")
+        status.update(label=f"Extracted {ok}/{len(results)} document(s)", state="complete")
+
+    st.dataframe(pd.DataFrame(results), use_container_width=True)
+    st.success("Analysis updated — open the 🧾 Annual Reports / 🎙 Management tabs "
+               "(or reload the company) to see the enhanced figures.")
+
+
 def _render_annual_reports_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
     """Surface AR-extracted data: exact figures, discrepancy, guidance, risks."""
     import pandas as pd
@@ -517,11 +582,14 @@ def main() -> None:
     )
 
     # --- Tabs ------------------------------------------------------------- #
-    (annual, quarterly, ratios, operational_tab, peers, tearsheet,
+    (upload, annual, quarterly, ratios, operational_tab, peers, tearsheet,
      screener_tab, pledge, annual_reports, management) = st.tabs(
-        ["Annual", "Quarterly", "Ratios", "Operational Data", "Peer Compare",
-         "Tearsheet", "Custom Screener", "🚨 Pledge", "🧾 Annual Reports", "🎙 Management"]
+        ["📤 Upload & Analyze", "Annual", "Quarterly", "Ratios", "Operational Data",
+         "Peer Compare", "Tearsheet", "Custom Screener", "🚨 Pledge",
+         "🧾 Annual Reports", "🎙 Management"]
     )
+    with upload:
+        _render_upload_tab(st, service, symbol, name or fin.name)
     with annual:
         _render_statement_tab(st, "annual P&L", fin.profit_loss)
         _render_statement_tab(st, "balance sheet", fin.balance_sheet)

@@ -33,6 +33,46 @@ FINANCIAL_FIELDS = (
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
+# Extraction-dict guidance keys → ARExtractedData columns.
+_GUIDANCE_MAP = {
+    "revenue_growth_pct": "guided_revenue_growth",
+    "margin_pct": "guided_margin",
+    "capex_amount": "guided_capex",
+    "raw_text": "guidance_raw_text",
+}
+
+
+def flatten_extraction(data: dict[str, Any]) -> dict[str, Any]:
+    """Flatten an extraction result into ARExtractedData column kwargs.
+
+    Args:
+        data: Extraction dict (nested financials/guidance) from :func:`parse`.
+
+    Returns:
+        Flat mapping of column name → value, ready for the repository upsert;
+        ``key_risks`` and ``pages_used`` are JSON-encoded.
+    """
+    flat: dict[str, Any] = {}
+    financials = data.get("financials", {}) or {}
+    for field in FINANCIAL_FIELDS:
+        if financials.get(field) is not None:
+            flat[field] = financials[field]
+
+    guidance = data.get("guidance", {}) or {}
+    for src_key, col in _GUIDANCE_MAP.items():
+        if guidance.get(src_key) is not None:
+            flat[col] = guidance[src_key]
+
+    if data.get("key_risks"):
+        flat["key_risks"] = json.dumps(data["key_risks"])
+    if data.get("confidence"):
+        flat["extraction_confidence"] = data["confidence"]
+    if data.get("pages_used"):
+        flat["pages_used"] = json.dumps(data["pages_used"])
+    if data.get("unit"):
+        flat["unit"] = data["unit"]
+    return flat
+
 SYSTEM_PROMPT = """You are a financial data extraction specialist for Indian \
 company annual reports. Return ONLY valid JSON — no explanation, no markdown, \
 no preamble. Report all amounts in the source unit (Crores or Lakhs). Use null \
