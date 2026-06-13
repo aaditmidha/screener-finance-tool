@@ -121,6 +121,41 @@ class TestOperationalToDf:
         assert components.operational_to_df(OperationalData(periods=[], metrics=[])).empty
 
 
+class TestHeadlineKpis:
+    _PAGE = """
+    <html><body><h1>Co</h1>
+      <section id="profit-loss"><table>
+        <thead><tr><th></th><th>Mar 2024</th><th>Mar 2025</th></tr></thead>
+        <tbody>
+          <tr><td>Sales</td><td>10,000</td><td>11,000</td></tr>
+          <tr><td>Operating Profit</td><td>2,000</td><td>2,200</td></tr>
+          <tr><td>Net Profit</td><td>1,200</td><td>1,350</td></tr>
+        </tbody>
+      </table></section>
+    </body></html>
+    """
+
+    def test_kpis_computed(self) -> None:
+        fin = parse_company_financials(self._PAGE)
+        kpis = dict(components.headline_kpis(fin))
+        assert kpis["Revenue (₹ cr)"] == "11,000"
+        assert kpis["Net profit (₹ cr)"] == "1,350"
+        assert kpis["EBITDA margin"] == "20.0%"
+        assert kpis["Revenue YoY"] == "+10.0%"
+
+    def test_empty_without_pl(self) -> None:
+        fin = parse_company_financials("<html><body></body></html>")
+        assert components.headline_kpis(fin) == []
+
+
+class TestStyleStatementDf:
+    def test_returns_styler(self) -> None:
+        import pandas as pd
+        from pandas.io.formats.style import Styler
+        df = pd.DataFrame({"Mar 2024": [10000.0, None]}, index=["Sales", "X"])
+        assert isinstance(components.style_statement_df(df), Styler)
+
+
 class TestDataQualityNote:
     def test_empty_when_all_exact(self) -> None:
         assert components.data_quality_note([], []) == ""

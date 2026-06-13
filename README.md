@@ -112,7 +112,7 @@ The system is split so the cloud limit never blocks you:
 ## Tests & CI
 
 ```bash
-pytest                                   # 457 tests
+pytest                                   # 464 tests
 pytest --cov=screener --cov-fail-under=70   # coverage gate (currently ~92%)
 ```
 

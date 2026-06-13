@@ -26,6 +26,15 @@ _BENEISH_STYLE = {
 }
 
 
+# Shared Plotly layout for a consistent dark, branded look across charts.
+_PLOTLY_LAYOUT = {
+    "paper_bgcolor": "rgba(0,0,0,0)",
+    "plot_bgcolor": "rgba(0,0,0,0)",
+    "font": {"color": "#e6edf3", "family": "Inter, sans-serif"},
+    "margin": {"l": 40, "r": 20, "t": 50, "b": 30},
+}
+
+
 def financial_table_to_df(table: FinancialTable | None) -> pd.DataFrame:
     """Convert a FinancialTable to a periods-as-columns DataFrame.
 
@@ -39,6 +48,62 @@ def financial_table_to_df(table: FinancialTable | None) -> pd.DataFrame:
     if table is None:
         return pd.DataFrame()
     return pd.DataFrame.from_dict(table.rows, orient="index", columns=table.periods)
+
+
+def style_statement_df(df: pd.DataFrame) -> "object":
+    """Return a Styler that formats a statement DataFrame for display.
+
+    Thousands-separated, no decimals, em-dash for missing cells, right-aligned.
+
+    Args:
+        df: A statement DataFrame from :func:`financial_table_to_df`.
+
+    Returns:
+        A pandas Styler (pass straight to ``st.dataframe``).
+    """
+    return df.style.format(na_rep="—", precision=0, thousands=",").set_properties(
+        **{"text-align": "right"}
+    )
+
+
+def headline_kpis(fin: CompanyFinancials) -> list[tuple[str, str]]:
+    """Return headline KPI tiles (label, formatted value) for the overview strip.
+
+    Args:
+        fin: Parsed company financials.
+
+    Returns:
+        Up to four (label, value) pairs — latest revenue, net profit, EBITDA
+        margin and YoY revenue growth — omitting any that can't be computed.
+    """
+    pl = fin.profit_loss
+    if pl is None:
+        return []
+
+    def _latest(*needles: str) -> float | None:
+        for needle in needles:
+            row = pl.row(needle)
+            if row:
+                for value in reversed(row):
+                    if value is not None:
+                        return value
+        return None
+
+    revenue = _latest("sales", "revenue")
+    pat = _latest("net profit", "profit after tax")
+    op_profit = _latest("operating profit")
+
+    kpis: list[tuple[str, str]] = []
+    if revenue is not None:
+        kpis.append(("Revenue (₹ cr)", f"{revenue:,.0f}"))
+    if pat is not None:
+        kpis.append(("Net profit (₹ cr)", f"{pat:,.0f}"))
+    if revenue and op_profit is not None:
+        kpis.append(("EBITDA margin", f"{op_profit / revenue * 100:.1f}%"))
+    rev_row = pl.row("sales") or pl.row("revenue")
+    if rev_row and len(rev_row) >= 2 and rev_row[-1] and rev_row[-2]:
+        kpis.append(("Revenue YoY", f"{(rev_row[-1] / rev_row[-2] - 1) * 100:+.1f}%"))
+    return kpis
 
 
 def beneish_flag(result: BeneishResult | None) -> tuple[str, str, str]:
@@ -174,6 +239,7 @@ def build_wc_heatmap_figure(heatmap: dict[str, list]) -> "object":
         title="Working Capital Cycle (days)",
         xaxis_title="Period",
         yaxis_title="Metric",
+        **_PLOTLY_LAYOUT,
     )
     return figure
 
@@ -343,7 +409,9 @@ def build_pledge_figure(history: list) -> "object":
         title="Promoter pledge history",
         yaxis_title="% of promoter holding pledged",
         yaxis_rangemode="tozero",
+        **_PLOTLY_LAYOUT,
     )
+    figure.update_traces(line_color="#2dd4bf", marker_color="#2dd4bf")
     return figure
 
 

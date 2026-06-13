@@ -24,7 +24,10 @@ scraper:
   retry_attempts: 3
   retry_backoff_seconds: 2
   rate_limit_delay_seconds: 1.5
-  user_agent: "Mozilla/5.0 (compatible; ScreenerFinanceTool/1.0)"
+  # A real browser UA: the old "ScreenerFinanceTool/1.0" bot UA got served
+  # stripped/blocked pages (the small-cap blank-data symptom), especially from
+  # datacenter IPs. Matches the AR downloader's fingerprint.
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
   retry_backoff_max_seconds: 30    # cap for exponential backoff
   playwright:
     enabled: true

@@ -107,12 +107,16 @@ def _render_header(st: Any) -> None:
 # --------------------------------------------------------------------------- #
 # Resource wiring (cached across reruns)
 # --------------------------------------------------------------------------- #
-def _build_service() -> CompanyDataService:
-    """Construct a CompanyDataService backed by a fresh DB session."""
+def _cached_engine():
+    """Build and migrate the engine once (safe to share across sessions).
+
+    The engine is cached as a Streamlit resource; a *fresh session* is created
+    per run (SQLAlchemy Sessions are not thread-safe and must not be shared
+    across Streamlit's per-user threads).
+    """
     engine = build_engine()
     ensure_schema(engine)
-    session = get_session_factory(engine)()
-    return CompanyDataService(session)
+    return engine
 
 
 def _financials_to_excel_bytes(fin: CompanyFinancials, ar_rows: list, annual_rows: list) -> bytes:
@@ -133,12 +137,12 @@ def _financials_to_excel_bytes(fin: CompanyFinancials, ar_rows: list, annual_row
 # Tab renderers
 # --------------------------------------------------------------------------- #
 def _render_statement_tab(st: Any, title: str, table: Any) -> None:
-    """Render a single parsed statement as a table, or an info message."""
+    """Render a single parsed statement as a formatted table, or an info message."""
     df = components.financial_table_to_df(table)
     if df.empty:
         st.info(f"No {title} data available for this company.")
     else:
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(components.style_statement_df(df), use_container_width=True)
 
 
 def _render_peer_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
@@ -438,7 +442,8 @@ def main() -> None:
     _inject_css(st)
     _render_header(st)
 
-    service = st.cache_resource(_build_service)()
+    engine = st.cache_resource(_cached_engine)()
+    service = CompanyDataService(get_session_factory(engine)())
 
     # --- Search with autocomplete ----------------------------------------- #
     @st.cache_data(ttl=300, show_spinner=False)
@@ -466,15 +471,25 @@ def main() -> None:
     st.caption(f"Data freshness: {components.format_freshness(service.freshness(symbol))}")
 
     # Refresh once per selected symbol; tab clicks rerun the script but must
-    # not hammer Screener with repeat fetches (the service object persists via
-    # cache_resource, so last_html survives reruns for the pledge tab).
+    # not hammer Screener with repeat fetches. The service is rebuilt each run
+    # (fresh session), so the page HTML is cached in session_state and
+    # re-hydrated onto the service for the pledge/peer features.
     if st.session_state.get("loaded_symbol") != symbol:
         with st.spinner(f"Loading {symbol}…"):
             st.session_state["fin"] = service.refresh(symbol)
+            st.session_state["last_html"] = service.last_html
             st.session_state["loaded_symbol"] = symbol
     fin = st.session_state["fin"]
+    service.last_html = st.session_state.get("last_html")
     pledge_history = pledge_monitor.parse_pledge_history(service.last_html or "")
     ar_pair = service.latest_ar_pair(symbol)
+
+    # --- KPI overview strip ----------------------------------------------- #
+    kpis = components.headline_kpis(fin)
+    if kpis:
+        cols = st.columns(len(kpis))
+        for col, (label, value) in zip(cols, kpis):
+            col.metric(label, value)
 
     # --- Headline: composite forensic score ------------------------------- #
     _render_forensic(st, fin, pledge_history)
