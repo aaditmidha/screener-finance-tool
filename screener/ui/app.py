@@ -30,7 +30,7 @@ from screener.models import (
 from screener.models.peer_comparison import PeerComparison
 from screener.scraper.acquisition import CompanyDataService, search_companies
 from screener.scraper.parser import CompanyFinancials
-from screener.ui import components
+from screener.ui import charts, components
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +355,18 @@ def _render_management_tab(st: Any, service: CompanyDataService, symbol: str,
     st.caption(f"Based on {scorecard.evaluated} guidance item(s) with known outcomes.")
 
 
+def _render_charts_tab(st: Any, fin: CompanyFinancials) -> None:
+    """Render the interactive focus charts in a two-column grid."""
+    figs = charts.focus_charts(fin)
+    if not figs:
+        st.info("Not enough data to plot focus charts for this company.")
+        return
+    cols = st.columns(2)
+    for i, (_title, fig) in enumerate(figs):
+        with cols[i % 2]:
+            st.plotly_chart(fig, use_container_width=True)
+
+
 def _render_operational_tab(st: Any, fin: CompanyFinancials) -> None:
     """Render derived operational-efficiency metrics, or an info message."""
     st.caption("Operating-efficiency metrics derived from the statements: margins, "
@@ -614,11 +626,11 @@ def main() -> None:
     )
 
     # --- Tabs ------------------------------------------------------------- #
-    (upload, annual, quarterly, ratios, operational_tab, peers, tearsheet, note_tab,
-     screener_tab, pledge, annual_reports, management) = st.tabs(
+    (upload, annual, quarterly, ratios, operational_tab, charts_tab, peers, tearsheet,
+     note_tab, screener_tab, pledge, annual_reports, management) = st.tabs(
         ["📤 Upload & Analyze", "Annual", "Quarterly", "Ratios", "Operational Data",
-         "Peer Compare", "Tearsheet", "📝 Research Note", "Custom Screener", "🚨 Pledge",
-         "🧾 Annual Reports", "🎙 Management"]
+         "📈 Charts", "Peer Compare", "Tearsheet", "📝 Research Note", "Custom Screener",
+         "🚨 Pledge", "🧾 Annual Reports", "🎙 Management"]
     )
     with upload:
         _render_upload_tab(st, service, symbol, name or fin.name)
@@ -632,6 +644,8 @@ def main() -> None:
         _render_statement_tab(st, "ratios", fin.ratios)
     with operational_tab:
         _render_operational_tab(st, fin)
+    with charts_tab:
+        _render_charts_tab(st, fin)
     with peers:
         _render_peer_tab(st, service, symbol)
     with tearsheet:
