@@ -19,7 +19,14 @@ from screener.config import CONFIG
 from screener.database.engine import build_engine, get_session_factory
 from screener.exporters import model_workbook
 from screener.exporters.tearsheet import TearsheetInput, generate_tearsheet
-from screener.models import beneish_adapter, custom_screener, pledge_monitor, working_capital as wc
+from screener.models import (
+    beneish_adapter,
+    custom_screener,
+    forensic_score,
+    operational,
+    pledge_monitor,
+    working_capital as wc,
+)
 from screener.models.peer_comparison import PeerComparison
 from screener.scraper.acquisition import CompanyDataService, search_companies
 from screener.scraper.parser import CompanyFinancials
@@ -66,23 +73,44 @@ def _render_statement_tab(st: Any, title: str, table: Any) -> None:
 
 def _render_peer_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
     """Run and display the ranked peer comparison."""
-    st.caption("Discovers sector peers from Screener and ranks them.")
+    st.caption("Discovers sector peers from Screener's peer table and ranks them "
+               "by ROCE, ROE, revenue growth and a composite score.")
     if not st.button("Run peer comparison", key="peer_btn"):
         return
     comparer = PeerComparison(
         company_repo=service._companies,           # reuse the service's repos
         annual_repo=service._annual,
-        fetch_page=service._fetch_page,
+        discover_peers=service.discover_peer_symbols,
         fetch_annual_data=service.get_annual_records,
     )
-    url = service._company_url(symbol)
+    progress = st.progress(0.0, text="Discovering peers…")
+
+    def _on_progress(sym: str, index: int, total: int) -> None:
+        progress.progress(index / total, text=f"Fetching {sym} ({index}/{total})…")
+
     try:
-        with st.spinner("Comparing peers…"):
-            ranked = comparer.compare(symbol, url)
+        ranked = comparer.compare(symbol, on_progress=_on_progress)
+        progress.empty()
         st.dataframe(ranked, use_container_width=True)
+    except ValueError as exc:                       # no comparable data gathered
+        progress.empty()
+        st.warning(f"No peer data available: {exc}")
     except Exception as exc:  # surface, don't crash the app
+        progress.empty()
         logger.exception("Peer comparison failed")
         st.error(f"Peer comparison failed: {exc}")
+
+
+def _render_operational_tab(st: Any, fin: CompanyFinancials) -> None:
+    """Render derived operational-efficiency metrics, or an info message."""
+    st.caption("Operating-efficiency metrics derived from the statements: margins, "
+               "turnover ratios, working-capital days and cash conversion.")
+    op = operational.compute(fin)
+    df = components.operational_to_df(op)
+    if df.empty:
+        st.info("Not enough data to derive operational metrics for this company.")
+    else:
+        st.dataframe(df, use_container_width=True)
 
 
 def _render_tearsheet_tab(
@@ -134,9 +162,25 @@ def _render_screener_tab(st: Any, service: CompanyDataService) -> None:
         st.error(str(exc))
 
 
-def _render_beneish(st: Any, fin: CompanyFinancials) -> None:
+def _render_forensic(st: Any, fin: CompanyFinancials, pledge_history: list) -> None:
+    """Render the composite forensic health score with a component breakdown."""
+    score = forensic_score.compute(fin, pledge_history=pledge_history or None)
+    emoji, colour, caption = components.forensic_badge(score)
+    st.markdown(
+        f"<span style='color:{colour};font-size:1.6rem;font-weight:700'>{emoji} {caption}</span>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("Forensic score breakdown"):
+        for comp in score.components:
+            mark = f"{comp.score:.0f}/100" if comp.available else "—"
+            st.markdown(f"**{comp.name}** · {mark} · {comp.detail}")
+
+
+def _render_beneish(st: Any, fin: CompanyFinancials,
+                    ar_pair: tuple = (None, None)) -> None:
     """Render the Beneish M-Score with a red/green flag and data disclosure."""
-    sourcing = beneish_adapter.from_financials(fin)
+    ar_current, ar_prior = ar_pair
+    sourcing = beneish_adapter.from_financials(fin, ar_current=ar_current, ar_prior=ar_prior)
     result = sourcing.result if sourcing else None
     emoji, colour, caption = components.beneish_flag(result)
     st.markdown(
@@ -145,6 +189,8 @@ def _render_beneish(st: Any, fin: CompanyFinancials) -> None:
     )
     if sourcing:
         st.caption(f"Computed on {sourcing.periods[0]} → {sourcing.periods[1]} annuals.")
+        if sourcing.exact_ar:
+            st.caption(f"✅ Exact from Annual Report: {', '.join(sourcing.exact_ar)}.")
         note = components.data_quality_note(sourcing.approximated, sourcing.missing)
         if note:
             st.caption(f"ℹ️ {note}. Results directionally accurate — see DECISIONS.md §7.1.")
@@ -237,12 +283,17 @@ def main() -> None:
             st.session_state["fin"] = service.refresh(symbol)
             st.session_state["loaded_symbol"] = symbol
     fin = st.session_state["fin"]
+    pledge_history = pledge_monitor.parse_pledge_history(service.last_html or "")
+    ar_pair = service.latest_ar_pair(symbol)
 
-    # --- Headline: Beneish flag + WC heatmap ------------------------------ #
+    # --- Headline: composite forensic score ------------------------------- #
+    _render_forensic(st, fin, pledge_history)
+
+    # --- Beneish flag + WC heatmap ---------------------------------------- #
     left, right = st.columns([1, 2])
     with left:
         st.subheader("Earnings-manipulation check")
-        _render_beneish(st, fin)
+        _render_beneish(st, fin, ar_pair=ar_pair)
     with right:
         st.subheader("Working capital")
         _render_wc_heatmap(st, fin)
@@ -256,9 +307,9 @@ def main() -> None:
     )
 
     # --- Tabs ------------------------------------------------------------- #
-    annual, quarterly, ratios, peers, tearsheet, screener_tab, pledge = st.tabs(
-        ["Annual", "Quarterly", "Ratios", "Peer Compare", "Tearsheet",
-         "Custom Screener", "🚨 Pledge"]
+    annual, quarterly, ratios, operational_tab, peers, tearsheet, screener_tab, pledge = st.tabs(
+        ["Annual", "Quarterly", "Ratios", "Operational Data", "Peer Compare",
+         "Tearsheet", "Custom Screener", "🚨 Pledge"]
     )
     with annual:
         _render_statement_tab(st, "annual P&L", fin.profit_loss)
@@ -268,6 +319,8 @@ def main() -> None:
         _render_statement_tab(st, "quarterly", fin.quarters)
     with ratios:
         _render_statement_tab(st, "ratios", fin.ratios)
+    with operational_tab:
+        _render_operational_tab(st, fin)
     with peers:
         _render_peer_tab(st, service, symbol)
     with tearsheet:

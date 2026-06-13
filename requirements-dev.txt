@@ -9,3 +9,7 @@ pytest-cov==7.1.0
 # Browser fallback for blocked scrapes (heavy — not deployed to Streamlit Cloud;
 # run `playwright install chromium` after installing)
 playwright==1.60.0
+
+# Annual-report PDF text extraction (local-only acquisition pipeline; the
+# hosted app reads extracted data from the DB and never needs this).
+pdfplumber==0.11.4

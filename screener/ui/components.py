@@ -178,6 +178,60 @@ def build_wc_heatmap_figure(heatmap: dict[str, list]) -> "object":
     return figure
 
 
+# Forensic verdict → (emoji, hex colour).
+_FORENSIC_STYLE = {
+    "healthy": ("🟢", "#27ae60"),
+    "watch": ("🟠", "#e67e22"),
+    "high_risk": ("🔴", "#c0392b"),
+}
+
+
+def forensic_badge(result: "object") -> tuple[str, str, str]:
+    """Return (emoji, colour, caption) for a ForensicScore.
+
+    Args:
+        result: A :class:`screener.models.forensic_score.ForensicScore`.
+
+    Returns:
+        Tuple of (badge emoji, hex colour, caption with score and verdict).
+    """
+    emoji, colour = _FORENSIC_STYLE.get(result.verdict, ("⚪", "#7f8c8d"))
+    caption = f"Forensic health {result.score:.0f}/100 — {result.verdict.replace('_', ' ')}"
+    return (emoji, colour, caption)
+
+
+def _format_operational(value: float | None, fmt: str) -> str:
+    """Format one operational metric value for display per its unit hint."""
+    if value is None:
+        return "—"
+    if fmt == "pct":
+        return f"{value * 100:.1f}%"
+    if fmt == "x":
+        return f"{value:.2f}x"
+    if fmt == "days":
+        return f"{value:.0f}"
+    return f"{value:.2f}"
+
+
+def operational_to_df(op: "object") -> pd.DataFrame:
+    """Turn an OperationalData into a display DataFrame (metrics × periods).
+
+    Args:
+        op: A :class:`screener.models.operational.OperationalData`.
+
+    Returns:
+        DataFrame indexed by metric label with formatted string cells; empty
+        when no metrics were computable.
+    """
+    if not op.metrics:
+        return pd.DataFrame()
+    rows = {
+        m.label: [_format_operational(v, m.fmt) for v in m.values]
+        for m in op.metrics
+    }
+    return pd.DataFrame.from_dict(rows, orient="index", columns=op.periods)
+
+
 def data_quality_note(approximated: list[str], missing: list[str]) -> str:
     """Render data-sourcing disclosures as one human-readable line.
 

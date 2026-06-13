@@ -1,7 +1,17 @@
 scraper:
   base_url: "https://www.screener.in"
   company_url_template: "https://www.screener.in/company/{symbol}/consolidated/"
+  # Bare URL = Screener's default/standalone view; used as fallback when the
+  # consolidated page is absent (404) or returns an empty profit-loss table.
+  standalone_url_template: "https://www.screener.in/company/{symbol}/"
   search_url_template: "https://www.screener.in/api/company/search/?q={query}"
+  # Peers are taken from the company's own Industry classification page (linked
+  # in the #peers breadcrumb) — the bare peers API isn't reliably industry-scoped.
+  min_annual_years: 3              # < this many annual periods → data_quality "partial"
+  retry:
+    jitter_seconds: 1.0            # random 0..jitter added to each backoff wait
+    block_retries: 2              # polite retries on transient blocks before BlockedError
+    transient_codes: [429, 503]   # retried politely (honouring Retry-After); 403 fails fast
   # Row-expand API: returns the granular child rows behind each "+" row.
   schedules_url_template: "https://www.screener.in/api/company/{company_id}/schedules/?parent={parent}&section={section}&consolidated=true"
   # Parents expanded per statement when enriching a company (each is one
@@ -121,6 +131,20 @@ thresholds:
 custom_screener:
   max_formula_length: 200      # guard against pathological expressions
 
+forensic_score:
+  # Component weights (renormalised over whichever components have data).
+  weights:
+    manipulation: 0.30         # Beneish M-Score verdict
+    earnings_quality: 0.30     # CFO/PAT + accrual flags
+    pledge: 0.20               # promoter pledge risk
+    leverage: 0.20             # debt-to-equity
+  bands:                       # composite 0-100 → verdict
+    healthy_min: 75
+    watch_min: 50
+  leverage:
+    de_safe: 0.5               # D/E at/below → full marks (100)
+    de_risky: 2.0              # D/E at/above → zero
+
 dcf:
   default_discount_rate: 0.12
   default_terminal_growth_rate: 0.04
@@ -161,6 +185,24 @@ llm:
   api_key_env: "GROQ_API_KEY"      # key read from this env var, never hardcoded
   temperature: 0.3
   max_tokens: 1200
+
+annual_report_extraction:
+  default_years: 9                 # "download last 9 ARs" default window
+  default_quarters: 12             # "last 12 quarters" default window
+  max_llm_chars: 12000             # focused text blob size sent to the LLM
+  llm_max_tokens: 2000
+  min_pdf_bytes: 100000            # < this → probably an error page, reject
+  # Keywords identifying financial-statement pages inside an AR PDF.
+  financial_page_keywords:
+    - "statement of profit and loss"
+    - "balance sheet"
+    - "cash flow statement"
+    - "consolidated financial"
+    - "standalone financial"
+  # Unit auto-detection markers.
+  unit_markers:
+    Cr: ["in crores", "₹ in crore", "rs. in crore", "in crore"]
+    Lakhs: ["in lakhs", "₹ in lakh", "rs. in lakh", "in lakh"]
 
 logging:
   level: "INFO"

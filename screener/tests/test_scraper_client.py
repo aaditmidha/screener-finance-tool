@@ -15,13 +15,15 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client.time, "sleep", lambda _s: None)
 
 
-def _response(status_code: int, text: str = "<html></html>") -> MagicMock:
+def _response(status_code: int, text: str = "<html></html>",
+              headers: dict | None = None) -> MagicMock:
     """Build a fake requests.Response with the given status and body."""
     resp = MagicMock(spec=requests.Response)
     resp.status_code = status_code
     resp.text = text
     resp.content = text.encode()
     resp.ok = 200 <= status_code < 400
+    resp.headers = headers or {}
     return resp
 
 
@@ -46,12 +48,38 @@ def test_retries_then_succeeds() -> None:
 
 
 def test_blocking_status_raises_blocked_error() -> None:
-    """A 403 should raise BlockedError immediately (no further retries)."""
+    """A 403 (hard block) should raise BlockedError immediately."""
     session = _session_returning(_response(403))
     with pytest.raises(BlockedError) as exc_info:
         client.fetch("https://x.test/a", session=session)
     assert exc_info.value.status_code == 403
-    assert session.get.call_count == 1
+    assert session.get.call_count == 1   # no polite retries for a hard block
+
+
+def test_transient_block_retries_then_raises() -> None:
+    """A persistent 429 should be politely retried before BlockedError."""
+    session = _session_returning(_response(429), _response(429), _response(429))
+    with pytest.raises(BlockedError) as exc_info:
+        client.fetch("https://x.test/a", session=session)
+    assert exc_info.value.status_code == 429
+    # block_retries=2 → 2 polite retries, then raise on the 3rd attempt.
+    assert session.get.call_count == 3
+
+
+def test_transient_block_then_success() -> None:
+    """A 503 that clears should succeed without surfacing a block."""
+    session = _session_returning(_response(503), _response(200, "recovered"))
+    assert client.fetch("https://x.test/a", session=session) == "recovered"
+
+
+def test_retry_after_header_honoured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A numeric Retry-After should drive the wait on a 429."""
+    waits: list[float] = []
+    monkeypatch.setattr(client.time, "sleep", lambda s: waits.append(s))
+    session = _session_returning(_response(429, headers={"Retry-After": "7"}),
+                                 _response(200, "ok"))
+    assert client.fetch("https://x.test/a", session=session) == "ok"
+    assert waits[0] == 7.0
 
 
 def test_exhausted_retries_raise_fetch_error() -> None:
@@ -69,12 +97,22 @@ def test_timeout_is_retried_then_raises() -> None:
         client.fetch("https://x.test/a", session=session)
 
 
-def test_backoff_grows_exponentially() -> None:
+def test_backoff_grows_exponentially(monkeypatch: pytest.MonkeyPatch) -> None:
     """_backoff_delay should double each attempt up to the configured cap."""
+    # Pin jitter to 0 so the exponential relationship is exact.
+    monkeypatch.setattr(client.random, "uniform", lambda _lo, _hi: 0.0)
     d1 = client._backoff_delay(1)
     d2 = client._backoff_delay(2)
     d3 = client._backoff_delay(3)
     assert d2 == pytest.approx(d1 * 2)
     assert d3 == pytest.approx(d1 * 4)
     cap = client._cfg["retry_backoff_max_seconds"]
-    assert client._backoff_delay(20) <= cap
+    assert client._backoff_delay(20) <= cap + client._cfg["retry"]["jitter_seconds"]
+
+
+def test_backoff_includes_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Jitter must be added on top of the exponential base delay."""
+    monkeypatch.setattr(client.random, "uniform", lambda _lo, hi: hi)  # max jitter
+    base = client._cfg["retry_backoff_seconds"]
+    jitter = client._cfg["retry"]["jitter_seconds"]
+    assert client._backoff_delay(1) == pytest.approx(base + jitter)

@@ -237,7 +237,7 @@ class PeerComparison:
         self,
         company_repo: Any,
         annual_repo: Any,
-        fetch_page: Callable[[str], str],
+        discover_peers: Callable[[str], list[str]],
         fetch_annual_data: Callable[[str], tuple[str, list[Any]]],
         config: dict[str, Any] | None = None,
     ) -> None:
@@ -246,16 +246,17 @@ class PeerComparison:
         Args:
             company_repo: A CompanyRepository (or compatible) for company rows.
             annual_repo: An AnnualDataRepository (or compatible) for annual rows.
-            fetch_page: ``url -> html`` for the base company's Screener page.
+            discover_peers: ``base_symbol -> [peer_symbol]``; resolves the peer
+                set (e.g. via the service's peers-API discovery).
             fetch_annual_data: ``symbol -> (company_name, [year_records])`` that
-                scrapes a peer's annual data. Each record must expose revenue,
+                fetches a company's annual data. Each record must expose revenue,
                 ebit, net_income, total_debt, shareholders_equity and a
                 ``fiscal_year_end`` date plus the persisted metric fields.
             config: Override config; defaults to the global CONFIG section.
         """
         self._company_repo = company_repo
         self._annual_repo = annual_repo
-        self._fetch_page = fetch_page
+        self._discover_peers = discover_peers
         self._fetch_annual_data = fetch_annual_data
         self._cfg = (config or CONFIG)["peer_comparison"] if config else _cfg
 
@@ -277,26 +278,38 @@ class PeerComparison:
             }
             self._annual_repo.upsert(company.id, rec.fiscal_year_end, **fields)
 
-    def compare(self, base_symbol: str, base_page_url: str) -> pd.DataFrame:
+    def compare(
+        self,
+        base_symbol: str,
+        on_progress: Callable[[str, int, int], None] | None = None,
+    ) -> pd.DataFrame:
         """Run the full pipeline for *base_symbol* and return a ranked frame.
 
         Discovers peers, pulls annual data for the base company and every peer
-        into the database, computes metrics, and ranks them.
+        into the database, computes metrics, and ranks them. Each company is
+        best-effort: one that fails to fetch or has no data is skipped, not
+        fatal.
 
         Args:
             base_symbol: The company to anchor the comparison on.
-            base_page_url: URL of the base company's Screener page (for peer
-                discovery).
+            on_progress: Optional ``(symbol, index, total) -> None`` callback
+                invoked before each company is fetched, for UI progress.
 
         Returns:
             A ranked comparison DataFrame (see :func:`rank_peers`).
+
+        Raises:
+            ValueError: If no company (base or peer) yielded comparable data.
         """
-        html = self._fetch_page(base_page_url)
-        peers = discover_peers(html, base_symbol, self._cfg["max_peers"])
-        symbols = [base_symbol.upper(), *peers]
+        base_symbol = base_symbol.upper()
+        peers = self._discover_peers(base_symbol)
+        symbols = [base_symbol, *peers]
+        total = len(symbols)
 
         metrics: list[PeerMetrics] = []
-        for symbol in symbols:
+        for index, symbol in enumerate(symbols, start=1):
+            if on_progress is not None:
+                on_progress(symbol, index, total)
             try:
                 name, records = self._fetch_annual_data(symbol)
             except Exception as exc:  # acquisition is best-effort per peer

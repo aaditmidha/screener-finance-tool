@@ -140,6 +140,22 @@ class TestNotesSheets:
         pytest.fail("Trade receivables row not found")
 
 
+class TestOperationalSheet:
+    def test_operational_sheet_present(self, workbook) -> None:
+        assert "Operational Data" in workbook.sheetnames
+
+    def test_operational_rows_and_formats(self, workbook) -> None:
+        ws = workbook["Operational Data"]
+        labels = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)]
+        assert any("margin" in (l or "").lower() for l in labels)
+        # A percent metric cell must carry a percent number format.
+        for r in range(3, ws.max_row + 1):
+            if ws.cell(r, 1).value == "EBITDA margin %":
+                assert ws.cell(r, 3).number_format == "0.0%"
+                return
+        pytest.fail("EBITDA margin row not found")
+
+
 class TestRobustness:
     def test_unenriched_fin_still_exports(self) -> None:
         """Without notes the workbook still has the statement sheets."""

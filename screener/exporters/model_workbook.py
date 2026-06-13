@@ -25,6 +25,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from screener.config import CONFIG
+from screener.models import operational
 from screener.scraper.parser import CompanyFinancials, FinancialTable
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class _Row:
     bold: bool = False
     pct: bool = False       # values are ratios → render as percentages
     is_header: bool = False  # group header — label only, no values
+    num_fmt: str | None = None  # explicit Excel number format (overrides pct/num)
 
 
 def _series(table: FinancialTable | None, *needles: str) -> list[float | None] | None:
@@ -218,8 +220,26 @@ def _write_sheet(ws: Worksheet, title: str, periods: list[str], rows: list[_Row]
                 if value is None:
                     continue
                 cell = ws.cell(r, col, value)
-                cell.number_format = _PCT_FMT if row.pct else _NUM_FMT
+                cell.number_format = row.num_fmt or (_PCT_FMT if row.pct else _NUM_FMT)
         r += 1
+
+
+def _operational_rows(op: "object") -> list[_Row]:
+    """Convert OperationalData metrics into formatted workbook rows.
+
+    Args:
+        op: A :class:`screener.models.operational.OperationalData`.
+
+    Returns:
+        One _Row per metric, with number formats matched to each unit
+        (percent, turnover ``x``, or whole days).
+    """
+    fmt_map = {"pct": (_PCT_FMT, True), "x": ('0.00"x"', False), "days": ("0", False)}
+    rows: list[_Row] = []
+    for metric in op.metrics:
+        num_fmt, pct = fmt_map.get(metric.fmt, (_NUM_FMT, False))
+        rows.append(_Row(metric.label, list(metric.values), pct=pct, num_fmt=num_fmt))
+    return rows
 
 
 def build_workbook(fin: CompanyFinancials) -> openpyxl.Workbook:
@@ -247,6 +267,9 @@ def build_workbook(fin: CompanyFinancials) -> openpyxl.Workbook:
         sheet_specs.append(("CF", fin.cash_flow.periods, _statement_rows(fin.cash_flow)))
     if fin.quarters:
         sheet_specs.append(("Quarterly", fin.quarters.periods, _statement_rows(fin.quarters)))
+    op = operational.compute(fin)
+    if op.metrics:
+        sheet_specs.append(("Operational Data", op.periods, _operational_rows(op)))
     if fin.notes_pl:
         sheet_specs.append(("Notes PL", fin.notes_pl.periods, _notes_rows(fin.notes_pl)))
     if fin.notes_bs:

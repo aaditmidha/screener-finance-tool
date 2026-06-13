@@ -5,6 +5,7 @@ This is the *primary* fetch path. When the server blocks plain HTTP requests
 """
 
 import logging
+import random
 import time
 from typing import Optional
 
@@ -33,8 +34,9 @@ def build_session() -> Session:
 def _backoff_delay(attempt: int) -> float:
     """Return the exponential-backoff delay (seconds) for a given attempt.
 
-    Delay grows as ``base * 2**(attempt - 1)`` and is capped at the configured
-    maximum to avoid unbounded waits.
+    Delay grows as ``base * 2**(attempt - 1)``, capped at the configured
+    maximum, plus random jitter in ``[0, jitter_seconds]``. Jitter prevents a
+    thundering-herd of synchronised retries hammering the server in lockstep.
 
     Args:
         attempt: 1-based attempt number that just failed.
@@ -44,7 +46,23 @@ def _backoff_delay(attempt: int) -> float:
     """
     base = _cfg["retry_backoff_seconds"]
     cap = _cfg["retry_backoff_max_seconds"]
-    return min(base * (2 ** (attempt - 1)), cap)
+    jitter = _cfg.get("retry", {}).get("jitter_seconds", 0.0)
+    return min(base * (2 ** (attempt - 1)), cap) + random.uniform(0, jitter)
+
+
+def _retry_after_seconds(response: Response) -> float | None:
+    """Return the server's Retry-After delay in seconds, if it sent one.
+
+    Args:
+        response: The HTTP response (typically a 429/503).
+
+    Returns:
+        The delay in seconds for a numeric Retry-After header, else None.
+    """
+    raw = response.headers.get("Retry-After", "").strip()
+    if raw.isdigit():
+        return float(raw)
+    return None
 
 
 def fetch(url: str, session: Optional[Session] = None) -> str:
@@ -66,8 +84,12 @@ def fetch(url: str, session: Optional[Session] = None) -> str:
     attempts = _cfg["retry_attempts"]
     timeout = _cfg["request_timeout_seconds"]
     blocking_codes = set(_cfg["playwright"]["fallback_status_codes"])
+    _retry_cfg = _cfg.get("retry", {})
+    block_retries = _retry_cfg.get("block_retries", 0)
+    transient_codes = set(_retry_cfg.get("transient_codes", []))
 
     last_reason = "unknown error"
+    block_seen = 0
 
     for attempt in range(1, attempts + 1):
         try:
@@ -84,13 +106,24 @@ def fetch(url: str, session: Optional[Session] = None) -> str:
         else:
             # Got a response — decide based on status code.
             if response.status_code in blocking_codes:
+                code = response.status_code
+                # Transient blocks (429/503) get a few polite waits — honouring
+                # Retry-After when present. A hard block (403) fails fast so the
+                # caller switches to the Playwright fallback without delay.
+                if code in transient_codes and block_seen < block_retries and attempt < attempts:
+                    block_seen += 1
+                    wait = _retry_after_seconds(response) or _backoff_delay(attempt)
+                    logger.warning(
+                        "Transient block %s HTTP %d; waiting %.1fs (block retry %d/%d)",
+                        url, code, wait, block_seen, block_retries,
+                    )
+                    time.sleep(wait)
+                    continue
                 logger.warning(
-                    "Server blocked %s with HTTP %d (attempt %d/%d)",
-                    url, response.status_code, attempt, attempts,
+                    "Server blocked %s with HTTP %d — surfacing to Playwright fallback",
+                    url, code,
                 )
-                # No point retrying a hard block — surface immediately so the
-                # caller can switch to the Playwright fallback.
-                raise BlockedError(url, response.status_code)
+                raise BlockedError(url, code)
             if response.ok:
                 logger.debug("Fetched %s (HTTP %d, %d bytes)", url, response.status_code, len(response.content))
                 time.sleep(_cfg["rate_limit_delay_seconds"])

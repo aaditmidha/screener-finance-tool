@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 
 from screener.database import cache
 from screener.database.models import Base, Company
-from screener.database.repository import AnnualDataRepository, CompanyRepository
+from screener.database.repository import (
+    AnnualDataRepository,
+    ARExtractedDataRepository,
+    CompanyRepository,
+)
 
 
 @pytest.fixture()
@@ -74,6 +78,35 @@ def test_upsert_updates_existing(session: Session) -> None:
     assert found.sector == "IT"
 
 
+class TestProvenanceFields:
+    """data_quality / view_type / scrape_error handling on upsert."""
+
+    def test_provenance_persisted(self, session: Session) -> None:
+        repo = CompanyRepository(session)
+        repo.upsert("INFY", "Infosys", data_quality="full", view_type="consolidated")
+        session.commit()
+        company = repo.get_by_symbol("INFY")
+        assert company.data_quality == "full"
+        assert company.view_type == "consolidated"
+
+    def test_none_provenance_does_not_clobber(self, session: Session) -> None:
+        """A later lightweight upsert (no quality args) keeps the prior grade."""
+        repo = CompanyRepository(session)
+        repo.upsert("INFY", "Infosys", data_quality="full", view_type="consolidated")
+        repo.upsert("INFY", "Infosys")          # peer-style upsert, no provenance
+        session.commit()
+        company = repo.get_by_symbol("INFY")
+        assert company.data_quality == "full"   # preserved
+        assert company.view_type == "consolidated"
+
+    def test_scrape_error_cleared_on_success(self, session: Session) -> None:
+        repo = CompanyRepository(session)
+        repo.upsert("INFY", "Infosys", scrape_error="blocked")
+        repo.upsert("INFY", "Infosys", data_quality="full")   # success path
+        session.commit()
+        assert repo.get_by_symbol("INFY").scrape_error is None
+
+
 def test_all_returns_companies_ordered_by_symbol(session: Session) -> None:
     repo = CompanyRepository(session)
     repo.upsert("WIPRO", "Wipro")
@@ -129,3 +162,54 @@ class TestAnnualDataRepository:
         repo = AnnualDataRepository(session)
         with pytest.raises(ValueError):
             repo.upsert(cid, date(2024, 3, 31), bogus_metric=1.0)
+
+
+class TestARExtractedDataRepository:
+    """CRUD + cache checks for AR-extracted figures."""
+
+    def _company_id(self, session: Session) -> int:
+        company = CompanyRepository(session).upsert("CGPOWER", "CG Power")
+        session.commit()
+        return company.id
+
+    def test_upsert_and_get(self, session: Session) -> None:
+        cid = self._company_id(session)
+        repo = ARExtractedDataRepository(session)
+        repo.upsert(cid, 2026, revenue=9000, trade_receivables=1600,
+                    extraction_confidence="high", unit="Cr")
+        session.commit()
+        row = repo.get(cid, 2026)
+        assert row.revenue == 9000
+        assert row.trade_receivables == 1600
+        assert row.extraction_confidence == "high"
+
+    def test_exists(self, session: Session) -> None:
+        cid = self._company_id(session)
+        repo = ARExtractedDataRepository(session)
+        assert repo.exists(cid, 2026) is False
+        repo.upsert(cid, 2026, revenue=9000)
+        session.commit()
+        assert repo.exists(cid, 2026) is True
+
+    def test_upsert_updates_same_year(self, session: Session) -> None:
+        cid = self._company_id(session)
+        repo = ARExtractedDataRepository(session)
+        repo.upsert(cid, 2026, revenue=100)
+        repo.upsert(cid, 2026, revenue=9000)
+        session.commit()
+        assert len(repo.for_company(cid)) == 1
+        assert repo.get(cid, 2026).revenue == 9000
+
+    def test_for_company_ordered(self, session: Session) -> None:
+        cid = self._company_id(session)
+        repo = ARExtractedDataRepository(session)
+        repo.upsert(cid, 2026, revenue=3)
+        repo.upsert(cid, 2024, revenue=1)
+        repo.upsert(cid, 2025, revenue=2)
+        session.commit()
+        assert [r.fiscal_year for r in repo.for_company(cid)] == [2024, 2025, 2026]
+
+    def test_unknown_field_raises(self, session: Session) -> None:
+        cid = self._company_id(session)
+        with pytest.raises(ValueError):
+            ARExtractedDataRepository(session).upsert(cid, 2026, bogus=1.0)
