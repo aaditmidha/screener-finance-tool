@@ -145,6 +145,28 @@ class TestToPdf:
         path = to_pdf(_SUMMARY, sample_input, out_dir=tmp_path)
         assert path.name == "INFY_tearsheet.pdf"
 
+    def test_pdf_with_table_and_chart(self, tmp_path) -> None:
+        """A tearsheet carrying a key-financials table and a chart still renders."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        ax.plot([1, 2, 3])
+        import io
+        buf = io.BytesIO(); fig.savefig(buf, format="png"); plt.close(fig)
+
+        data = TearsheetInput(
+            symbol="INFY", name="Infosys",
+            metrics={"Forensic score": "100/100 (healthy)"},
+            periods=["Mar 2024", "Mar 2025"],
+            key_financials=[("Revenue", [10000, 11000], "num"),
+                            ("PAT margin %", [0.15, 0.16], "pct")],
+            chart_pngs=[("Revenue & PAT", buf.getvalue())],
+        )
+        path = to_pdf(_SUMMARY, data, out_dir=tmp_path)
+        assert path.read_bytes().startswith(b"%PDF")
+        assert path.stat().st_size > 3000      # table + image embedded
+
 
 class TestRenderStreamlit:
     def test_calls_streamlit_methods(self, sample_input: TearsheetInput) -> None:
