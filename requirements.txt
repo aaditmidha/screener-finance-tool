@@ -31,3 +31,7 @@ groq==1.4.0
 # Research-note generation (Word doc + focus charts)
 python-docx==1.1.2
 matplotlib==3.9.2
+
+# PDF text extraction — powers the user-upload ingestion (runs on the hosted
+# app, so this must be a runtime dependency, not dev-only).
+pdfplumber==0.11.4
