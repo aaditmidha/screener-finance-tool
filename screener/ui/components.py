@@ -200,6 +200,44 @@ def forensic_badge(result: "object") -> tuple[str, str, str]:
     return (emoji, colour, caption)
 
 
+def build_forensic_gauge(result: "object") -> "object":
+    """Build a Plotly gauge for the 0–100 forensic health score.
+
+    Args:
+        result: A :class:`screener.models.forensic_score.ForensicScore`.
+
+    Returns:
+        A ``plotly.graph_objects.Figure`` indicator gauge with red/amber/green
+        zones and the verdict-coloured needle.
+    """
+    import plotly.graph_objects as go
+
+    colour = _FORENSIC_STYLE.get(result.verdict, ("", "#7f8c8d"))[1]
+    figure = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=result.score,
+        number={"suffix": "/100", "font": {"size": 40, "color": colour}},
+        gauge={
+            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#8b949e"},
+            "bar": {"color": colour, "thickness": 0.28},
+            "bgcolor": "rgba(0,0,0,0)",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0, 50], "color": "rgba(192,57,43,0.22)"},
+                {"range": [50, 75], "color": "rgba(230,126,34,0.22)"},
+                {"range": [75, 100], "color": "rgba(39,174,96,0.22)"},
+            ],
+            "threshold": {"line": {"color": colour, "width": 4}, "thickness": 0.8,
+                          "value": result.score},
+        },
+    ))
+    figure.update_layout(
+        height=220, margin={"l": 24, "r": 24, "t": 16, "b": 8},
+        paper_bgcolor="rgba(0,0,0,0)", font={"color": "#e6edf3", "family": "Inter, sans-serif"},
+    )
+    return figure
+
+
 def _format_operational(value: float | None, fmt: str) -> str:
     """Format one operational metric value for display per its unit hint."""
     if value is None:

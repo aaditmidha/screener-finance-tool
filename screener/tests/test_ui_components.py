@@ -148,6 +148,13 @@ class TestForensicBadge:
         assert emoji == "🔴"
         assert "high risk" in caption
 
+    def test_gauge_reflects_score(self) -> None:
+        figure = components.build_forensic_gauge(self._score("watch", 66))
+        assert figure.data[0].type == "indicator"
+        assert figure.data[0].value == 66
+        # three coloured zones (red/amber/green)
+        assert len(figure.data[0].gauge.steps) == 3
+
 
 class TestPledgeComponents:
     def _result(self, level: str, latest: float = 25.0, rising: bool = False):

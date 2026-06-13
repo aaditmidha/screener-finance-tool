@@ -5,11 +5,10 @@ accounting checks, peer ranking, and an AI-written one-page investment
 tearsheet. Data is scraped from [Screener.in](https://www.screener.in),
 cached in SQLite, and served through a Streamlit dashboard.
 
-![Live demo](docs/demo.gif)
+![Dashboard](docs/screenshot.png)
 
-*Live demo: searching Infosys, the Beneish M-Score computed on real data with
-its data-quality disclosure, statement tabs, the custom formula screener, and
-the pledge monitor.*
+*Forensic-health gauge with component breakdown, the Beneish M-Score with its
+data-quality disclosure, and the full analysis tab bar — on live Infosys data.*
 
 ## Live App
 

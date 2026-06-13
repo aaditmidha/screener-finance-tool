@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from screener.config import CONFIG
-from screener.database.engine import build_engine, get_session_factory
+from screener.database.engine import build_engine, ensure_schema, get_session_factory
 from screener.exporters import model_workbook
 from screener.exporters.tearsheet import TearsheetInput, generate_tearsheet
 from screener.models import (
@@ -34,6 +34,75 @@ from screener.ui import components
 
 logger = logging.getLogger(__name__)
 
+# Custom theme/CSS — gives the dashboard a polished fintech look rather than
+# the default Streamlit chrome. Injected once per run.
+_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"], button, input, textarea { font-family: 'Inter', sans-serif; }
+
+/* Hide Streamlit chrome for a product feel */
+#MainMenu, footer { visibility: hidden; }
+[data-testid="stToolbar"] { right: 1rem; }
+.block-container { padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1180px; }
+
+/* Branded header */
+.app-header { margin-bottom: 0.4rem; }
+.app-title { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.5px; line-height: 1.1;
+  background: linear-gradient(90deg, #e6edf3 0%, #2dd4bf 120%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.app-title .mark { -webkit-text-fill-color: #2dd4bf; }
+.app-sub { color: #8b949e; font-size: 0.95rem; margin-top: 0.15rem; }
+.app-pills { margin-top: 0.7rem; display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { background: rgba(45,212,191,0.10); color: #2dd4bf; border: 1px solid rgba(45,212,191,0.30);
+  border-radius: 999px; padding: 3px 11px; font-size: 0.72rem; font-weight: 600; }
+
+/* Card-like bordered containers */
+[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px;
+  border-color: rgba(255,255,255,0.07) !important;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0));
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+
+/* Metric tiles */
+[data-testid="stMetric"] { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px; padding: 10px 14px; }
+[data-testid="stMetricValue"] { font-weight: 700; font-size: 1.4rem; }
+[data-testid="stMetricLabel"] { color: #8b949e; }
+
+/* Tabs as pills */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.stTabs [data-baseweb="tab"] { padding: 9px 15px; border-radius: 9px 9px 0 0; font-weight: 600; }
+.stTabs [aria-selected="true"] { background: rgba(45,212,191,0.12); color: #2dd4bf; }
+
+/* Buttons */
+.stButton > button, .stDownloadButton > button { border-radius: 10px; font-weight: 600;
+  border: 1px solid rgba(45,212,191,0.35); }
+.stDataFrame { border-radius: 10px; overflow: hidden; }
+</style>
+"""
+
+
+def _inject_css(st: Any) -> None:
+    """Inject the custom theme CSS once."""
+    st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def _render_header(st: Any) -> None:
+    """Render the branded gradient header with capability pills."""
+    pills = ["Forensic score", "Beneish M-Score", "Reverse DCF", "Earnings quality",
+             "Peer ranking", "Pledge monitor", "AI tearsheet", "Annual-report intelligence"]
+    pill_html = "".join(f'<span class="pill">{p}</span>' for p in pills)
+    st.markdown(
+        f"""
+        <div class="app-header">
+          <div class="app-title"><span class="mark">◆</span> Screener Forensic <span style="font-weight:600;">Intelligence</span></div>
+          <div class="app-sub">Beyond the numbers — forensic accounting, valuation and AR intelligence for Indian equities.</div>
+          <div class="app-pills">{pill_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # --------------------------------------------------------------------------- #
 # Resource wiring (cached across reruns)
@@ -41,8 +110,7 @@ logger = logging.getLogger(__name__)
 def _build_service() -> CompanyDataService:
     """Construct a CompanyDataService backed by a fresh DB session."""
     engine = build_engine()
-    from screener.database.models import Base
-    Base.metadata.create_all(engine)
+    ensure_schema(engine)
     session = get_session_factory(engine)()
     return CompanyDataService(session)
 
@@ -281,17 +349,20 @@ def _render_screener_tab(st: Any, service: CompanyDataService) -> None:
 
 
 def _render_forensic(st: Any, fin: CompanyFinancials, pledge_history: list) -> None:
-    """Render the composite forensic health score with a component breakdown."""
+    """Render the composite forensic health score as a gauge + component tiles."""
     score = forensic_score.compute(fin, pledge_history=pledge_history or None)
-    emoji, colour, caption = components.forensic_badge(score)
-    st.markdown(
-        f"<span style='color:{colour};font-size:1.6rem;font-weight:700'>{emoji} {caption}</span>",
-        unsafe_allow_html=True,
-    )
-    with st.expander("Forensic score breakdown"):
-        for comp in score.components:
-            mark = f"{comp.score:.0f}/100" if comp.available else "—"
-            st.markdown(f"**{comp.name}** · {mark} · {comp.detail}")
+    with st.container(border=True):
+        gauge_col, comp_col = st.columns([1, 1.3])
+        with gauge_col:
+            st.markdown("##### 🚦 Forensic health")
+            st.plotly_chart(components.build_forensic_gauge(score), use_container_width=True)
+        with comp_col:
+            st.markdown("##### Component breakdown")
+            grid = st.columns(2)
+            for i, comp in enumerate(score.components):
+                with grid[i % 2]:
+                    value = f"{comp.score:.0f}/100" if comp.available else "—"
+                    st.metric(comp.name.split(" (")[0], value, help=comp.detail)
 
 
 def _render_beneish(st: Any, fin: CompanyFinancials,
@@ -363,8 +434,9 @@ def main() -> None:
     from screener.logging_config import setup_logging
     setup_logging()
 
-    st.set_page_config(page_title="Screener Finance Tool", layout="wide")
-    st.title("Screener Finance Tool")
+    st.set_page_config(page_title="Screener Forensic Intelligence", layout="wide", page_icon="◆")
+    _inject_css(st)
+    _render_header(st)
 
     service = st.cache_resource(_build_service)()
 
@@ -410,11 +482,13 @@ def main() -> None:
     # --- Beneish flag + WC heatmap ---------------------------------------- #
     left, right = st.columns([1, 2])
     with left:
-        st.subheader("Earnings-manipulation check")
-        _render_beneish(st, fin, ar_pair=ar_pair)
+        with st.container(border=True):
+            st.markdown("##### 🔎 Earnings-manipulation check")
+            _render_beneish(st, fin, ar_pair=ar_pair)
     with right:
-        st.subheader("Working capital")
-        _render_wc_heatmap(st, fin)
+        with st.container(border=True):
+            st.markdown("##### 💧 Working capital")
+            _render_wc_heatmap(st, fin)
 
     # --- Excel download --------------------------------------------------- #
     company = service._companies.get_by_symbol(symbol)
