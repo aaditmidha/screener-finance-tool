@@ -71,6 +71,12 @@ class TearsheetInput:
     financials: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     peer_ranking: pd.DataFrame | None = None
+    ar_context: dict[str, Any] = field(default_factory=dict)   # exact Annual-Report data
+
+    @property
+    def ar_enhanced(self) -> bool:
+        """True if exact Annual-Report context was supplied."""
+        return bool(self.ar_context)
 
 
 @dataclass
@@ -163,6 +169,7 @@ def build_prompt(data: TearsheetInput) -> tuple[str, str]:
     """
     blocks = [
         f"Company: {data.name} ({data.symbol})",
+        _format_block("Annual Report data (exact figures)", data.ar_context),
         _format_block("Financials", data.financials),
         _format_block("Calculated Metrics", data.metrics),
         _format_block("Peer Ranking", data.peer_ranking),

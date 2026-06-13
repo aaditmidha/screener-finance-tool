@@ -288,6 +288,21 @@ CG Power 66/100 (watch — matching its real accounting-fraud history).
   `ARExtractedData` + repository, `ar_pipeline` (§15), all tested with mocks.
 - **Session C consumption: Beneish-AR hybrid done** (§15) and wired into the UI.
 - **Forensic Red-Flag score: done** (§16) — headline composite, hosted-ready.
-- **Deferred:** 🧾 Annual Reports UI tab + AR Excel sheets (Sessions D–E),
-  credibility-tracker wiring to AR guidance, quarterly-results downloader, and
-  concall transcript fetching.
+- **AR surfacing done:** 🧾 Annual Reports tab + AR Excel sheets + `ar_insights`
+  (discrepancy, risk timeline, guidance scorecard); 🎙 Management tab; tearsheet
+  enriched with exact AR data when present.
+- **Deferred (low value / unverifiable in CI):** standalone quarterly-results
+  PDF downloader, and live concall-transcript fetching. Both are local-only
+  network acquisition with limited analytical lift beyond what the AR pipeline
+  already provides; the credibility engine is fully built and is fed by AR
+  guidance today (a transcript path would be additive, not new capability).
+
+## 17. Local vs hosted split is the deployment contract
+
+The hosted Streamlit app serves everything that runs on Screener-sourced data
+(dashboard, forensic score, Beneish, peers, operational, pledge, custom
+screener, tearsheet). The AR pipeline (Playwright + Groq) runs **locally only**
+and populates the DB; the 🧾/🎙 tabs and AR-upgraded Beneish then read that data
+wherever the DB is present. This keeps the cloud deploy light and reliable
+while the heavy/blocked-prone acquisition happens on a residential IP. The DB
+is the contract between the two halves.

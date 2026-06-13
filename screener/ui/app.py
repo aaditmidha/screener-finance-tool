@@ -159,6 +159,33 @@ def _render_annual_reports_tab(st: Any, service: CompanyDataService, symbol: str
         ), use_container_width=True)
 
 
+def _render_management_tab(st: Any, service: CompanyDataService, symbol: str,
+                           ar_rows: list, annual_rows: list) -> None:
+    """Render the management-credibility scorecard (guidance vs delivery)."""
+    from screener.models import ar_insights
+
+    st.caption("Scores management's guidance against what was actually delivered, "
+               "from Annual-Report data.")
+    if not ar_rows:
+        st.info("No Annual-Report data yet. Run the AR pipeline locally to extract "
+                "management guidance, then credibility scoring appears here.")
+        return
+
+    revenue_by_year = {r.fiscal_year_end.year: r.revenue for r in annual_rows if r.revenue}
+    scorecard = ar_insights.guidance_scorecard(ar_rows, revenue_by_year)
+    if scorecard is None:
+        st.info("No quantified guidance could be paired with actuals yet "
+                "(needs guidance from one year and the following year's result).")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Credibility", f"{scorecard.score:.1f}/10", scorecard.rating)
+    col2.metric("Hit rate", f"{scorecard.hit_rate:.0%}")
+    col3.metric("Bias", f"{scorecard.bias:+.0%}",
+                help="positive = under-promises/over-delivers")
+    st.caption(f"Based on {scorecard.evaluated} guidance item(s) with known outcomes.")
+
+
 def _render_operational_tab(st: Any, fin: CompanyFinancials) -> None:
     """Render derived operational-efficiency metrics, or an info message."""
     st.caption("Operating-efficiency metrics derived from the statements: margins, "
@@ -171,14 +198,47 @@ def _render_operational_tab(st: Any, fin: CompanyFinancials) -> None:
         st.dataframe(df, use_container_width=True)
 
 
+def _build_tearsheet_input(
+    symbol: str, name: str, fin: CompanyFinancials, pledge_history: list, ar_pair: tuple
+) -> TearsheetInput:
+    """Assemble a rich tearsheet input from the computed forensic signals."""
+    score = forensic_score.compute(fin, pledge_history=pledge_history or None)
+    metrics: dict[str, Any] = {
+        "forensic_score": f"{score.score:.0f}/100 ({score.verdict})",
+    }
+    for comp in score.components:
+        if comp.available:
+            metrics[comp.name] = comp.detail
+
+    ar_context: dict[str, Any] = {}
+    ar_current, _ar_prior = ar_pair
+    if ar_current is not None:
+        import json
+        for label, attr in [("Revenue", "revenue"), ("PAT", "pat"), ("CFO", "cfo"),
+                            ("Trade receivables", "trade_receivables")]:
+            val = getattr(ar_current, attr, None)
+            if val is not None:
+                ar_context[f"{label} (AR FY{ar_current.fiscal_year})"] = val
+        if getattr(ar_current, "guidance_raw_text", None):
+            ar_context["Management guidance"] = ar_current.guidance_raw_text
+        risks = getattr(ar_current, "key_risks", None)
+        if risks:
+            try:
+                ar_context["Key risks"] = ", ".join(json.loads(risks)[:3])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return TearsheetInput(symbol=symbol, name=name, metrics=metrics, ar_context=ar_context)
+
+
 def _render_tearsheet_tab(
-    st: Any, symbol: str, name: str, metrics: dict[str, Any]
+    st: Any, data: TearsheetInput
 ) -> None:
     """Generate and display the LLM tearsheet (needs GROQ_API_KEY)."""
     st.caption("Generates a 1-page plain-English summary via the Groq API.")
+    st.caption("✅ Enhanced with Annual Report data." if data.ar_enhanced
+               else "Using Screener data only (run the AR pipeline locally to enrich).")
     if not st.button("Generate tearsheet", key="ts_btn"):
         return
-    data = TearsheetInput(symbol=symbol, name=name, metrics=metrics)
     try:
         with st.spinner("Writing tearsheet…"):
             sheet = generate_tearsheet(data, make_pdf=True)
@@ -369,9 +429,9 @@ def main() -> None:
 
     # --- Tabs ------------------------------------------------------------- #
     (annual, quarterly, ratios, operational_tab, peers, tearsheet,
-     screener_tab, pledge, annual_reports) = st.tabs(
+     screener_tab, pledge, annual_reports, management) = st.tabs(
         ["Annual", "Quarterly", "Ratios", "Operational Data", "Peer Compare",
-         "Tearsheet", "Custom Screener", "🚨 Pledge", "🧾 Annual Reports"]
+         "Tearsheet", "Custom Screener", "🚨 Pledge", "🧾 Annual Reports", "🎙 Management"]
     )
     with annual:
         _render_statement_tab(st, "annual P&L", fin.profit_loss)
@@ -386,13 +446,16 @@ def main() -> None:
     with peers:
         _render_peer_tab(st, service, symbol)
     with tearsheet:
-        _render_tearsheet_tab(st, symbol, name or fin.name, metrics={})
+        _render_tearsheet_tab(st, _build_tearsheet_input(symbol, name or fin.name, fin,
+                                                          pledge_history, ar_pair))
     with screener_tab:
         _render_screener_tab(st, service)
     with pledge:
         _render_pledge_tab(st, service)
     with annual_reports:
         _render_annual_reports_tab(st, service, symbol)
+    with management:
+        _render_management_tab(st, service, symbol, ar_rows, annual_rows)
 
 
 if __name__ == "__main__":
