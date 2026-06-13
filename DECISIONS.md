@@ -149,3 +149,160 @@ year.
 **Why:** Matches the eight reference workbooks this tool is meant to
 reproduce; deviation from the analyst's own working style would make outputs
 unusable for their actual workflow.
+
+## 10. Consolidated → standalone fallback + data-quality grading
+
+**Decision:** `CompanyDataService.refresh` tries `/company/{sym}/consolidated/`
+first; if that 404s/blocks **or loads with an empty profit-loss table**, it
+retries the bare `/company/{sym}/` URL (Screener's default/standalone view).
+The view used (`consolidated`/`standalone`), a `data_quality` grade
+(`full`/`partial`/`insufficient`), and any `scrape_error` are persisted on the
+Company row. A total fetch failure is recorded, not raised, so one bad company
+never crashes a batch (e.g. peer comparison).
+
+**Why:** Smaller companies (e.g. Bharat Bijlee) showed blank pages — not a
+login wall, but either a consolidated page that's empty or a datacenter-IP
+block returning a stripped page. `/company/{sym}/standalone/` does **not**
+exist on Screener (it 404s); the bare URL is the real standalone view. Grading
+data quality makes the "insufficient data" UI state accurate instead of
+guessed. (This is Phase 2 Session A FIX 2; FIX 1 — Screener login — was
+deliberately skipped, see §12.)
+
+## 11. Rate-limit retry: jitter + transient-only polite retries
+
+**Decision:** `client._backoff_delay` adds random jitter on top of the
+exponential base. On a blocking status, **429/503 (transient)** get a few
+polite retries honouring `Retry-After`; **403 (hard block)** fails fast to the
+Playwright fallback with no delay. All tunables live under `scraper.retry` in
+config.
+
+**Why:** Jitter avoids synchronised-retry thundering herds. 429/503 are
+usually transient (worth a short wait), but a 403 is a wall — burning retries
+on it only delays the browser fallback that actually gets through. Kept inside
+the existing `client.fetch` rather than a separate `retry.py` (the Phase 2
+doc's layout) so there's one fetch path, not two. (Phase 2 Session A FIX 3.)
+
+## 12. Screener login deliberately NOT implemented (Phase 2 FIX 1 skipped)
+
+**Decision:** No Screener authentication / credential handling. The blank-data
+problem it was meant to solve is fixed by the standalone fallback (§10).
+
+**Why:** Company pages are public (12 years of history scrape fine
+anonymously), so login buys little. Against that: automated login ties every
+request to the user's identified account (raising *personal-account* ban risk
+vs anonymous), and the app deploys to Streamlit Community Cloud from a public
+repo on a shared datacenter IP — the worst place to run logged-in automation
+or store a password. The marginal benefit didn't justify the account/ToS/
+credential risk. Revisit only as a local-only, off-by-default option.
+
+## 13. Peers from the Industry page, not the bare peers API
+
+**Decision:** `discover_peer_symbols` reads the company's **Industry breadcrumb
+link** from the `#peers` section and parses that industry's listing page for
+peer tickers — rather than calling `/api/company/{id}/peers/`.
+
+**Why:** The bare peers API isn't reliably industry-scoped when called
+headlessly — it returned fertilizer companies for CG Power and granite
+companies for Bharat Bijlee (both electrical-equipment firms); the site's JS
+passes a segment parameter we'd have to reverse-engineer. The Industry page
+(`/market/.../IN0702.../`) is the company's own classification and yields true
+peers (CG Power → ABB, Siemens, Hitachi Energy, BHEL, Thermax). Separately,
+the old discovery scraped **all** `/company/` anchors on the full page (nav,
+news, ~53 links) and then **fully scraped + notes-enriched each** — the cause
+of the timeouts the user saw. Peers now use a lightweight fetch (`enrich=False`,
+no schedule calls) and report progress.
+
+## 14. Operational Data: derived, since Screener has no such section
+
+**Decision:** The Operational Data tab/sheet (`models/operational.py`) is
+*derived* from the statements — margins, asset/fixed-asset/inventory turnover,
+working-capital days (DSO/DIO/DPO/CCC), and cash conversion (CFO/EBITDA,
+CFO/PAT) — not scraped.
+
+**Why:** Screener exposes no generic "operational data" section, but the
+reference workbooks' Operational Data sheets are exactly these operating-
+efficiency ratios, all computable from P&L/BS/CF + expand-API notes. Metrics
+whose inputs are missing are omitted rather than shown as zero, so nothing is
+fabricated. Day-metrics use the annual (365-day) convention since the source
+periods are fiscal years.
+
+## 15. AR pipeline: local acquisition, cloud read-only (split by the DB)
+
+**Decision:** The annual-report pipeline is split in two. **Local** does the
+heavy work — `ar_downloader` (Playwright + IR→NSE→BSE) fetches PDFs,
+`pdf_extractor` (pdfplumber) pulls the financial-statement pages, and
+`ar_parser` sends them to Groq (regex fallback) for structured figures —
+writing rows to `ar_extracted_data`. **Cloud** only ever *reads* those rows to
+drive analysis. `pdfplumber`/`playwright` are dev/local-only deps; the hosted
+app never imports them.
+
+**Why:** Playwright isn't available on Streamlit Community Cloud and BSE blocks
+its datacenter IP, so acquisition can't run there — but it runs fine locally
+(installed Chromium, residential IP). The database is the handoff: run the
+pipeline locally once per company, then the cloud app serves the extracted data
+read-only (commit a small pre-populated `screener.db` for the demo). The PDFs
+are a means; the extracted data is the product. Both layers are cache-first —
+`ar_downloader` skips downloaded PDFs, `ARPipeline` skips already-extracted
+years — so nothing re-downloads or re-extracts.
+
+**Extraction quality:** every unfound field is `null` (never guessed), each
+extraction is graded high/medium/low by how much was found, and a regex
+fallback (revenue/PAT/CFO + unit detection) keeps the pipeline working at low
+confidence when Groq is unavailable.
+
+**Beneish hybrid (done):** `beneish_adapter.from_financials` now takes optional
+`ar_current`/`ar_prior` rows and overrides the Screener approximations with
+exact AR figures (receivables, total assets, depreciation, PAT, CFO, debt,
+revenue) where both years are present — un-neutralising DSRI/TATA — keeping the
+Screener base for fields the AR doesn't expose (PPE, current items, SGA). The
+overridden fields are reported in `BeneishSourcing.exact_ar` and surfaced in
+the UI ("✅ Exact from Annual Report: …"). `latest_ar_pair()` on the service
+feeds them in; with no AR data it's a no-op, so the hosted app is unaffected.
+
+## 16. Forensic Red-Flag composite score
+
+**Decision:** `models/forensic_score.py` aggregates four existing signals —
+Beneish verdict, earnings quality (CFO/PAT + accruals), promoter-pledge risk,
+and debt-to-equity — into one 0–100 health score (higher = healthier) with a
+per-component breakdown and a healthy/watch/high-risk verdict. Shown as the
+page headline above the Beneish/working-capital row. Weights and bands are in
+config; components with no data are excluded and weights renormalised over the
+rest.
+
+**Why:** This is the clearest "stand out vs Screener" feature — no free (or
+most paid) Indian tool publishes an aggregated forensic score, and it composes
+work already built. It runs entirely on Screener-sourced data (no AR/local
+dependency), so it works on the hosted app immediately. It degrades honestly:
+each component states whether it contributed and why (e.g. "no pledge data"),
+so the number is never a black box. Live check: Infosys 100/100 (healthy),
+CG Power 66/100 (watch — matching its real accounting-fraud history).
+
+## Phase 2 status
+
+- **Session A (Screener robustness): done** — §10 (FIX 2), §11 (FIX 3); FIX 1
+  skipped (§12).
+- **Reported bugs: done** — peer comparison (§13), Operational Data tab (§14).
+- **Session B (AR downloader): foundation exists** (`ar_downloader.py`, no
+  credentials — §12); quarterly-results download not built.
+- **Session C (extraction pipeline): done** — `pdf_extractor`, `ar_parser`,
+  `ARExtractedData` + repository, `ar_pipeline` (§15), all tested with mocks.
+- **Session C consumption: Beneish-AR hybrid done** (§15) and wired into the UI.
+- **Forensic Red-Flag score: done** (§16) — headline composite, hosted-ready.
+- **AR surfacing done:** 🧾 Annual Reports tab + AR Excel sheets + `ar_insights`
+  (discrepancy, risk timeline, guidance scorecard); 🎙 Management tab; tearsheet
+  enriched with exact AR data when present.
+- **Deferred (low value / unverifiable in CI):** standalone quarterly-results
+  PDF downloader, and live concall-transcript fetching. Both are local-only
+  network acquisition with limited analytical lift beyond what the AR pipeline
+  already provides; the credibility engine is fully built and is fed by AR
+  guidance today (a transcript path would be additive, not new capability).
+
+## 17. Local vs hosted split is the deployment contract
+
+The hosted Streamlit app serves everything that runs on Screener-sourced data
+(dashboard, forensic score, Beneish, peers, operational, pledge, custom
+screener, tearsheet). The AR pipeline (Playwright + Groq) runs **locally only**
+and populates the DB; the 🧾/🎙 tabs and AR-upgraded Beneish then read that data
+wherever the DB is present. This keeps the cloud deploy light and reliable
+while the heavy/blocked-prone acquisition happens on a residential IP. The DB
+is the contract between the two halves.

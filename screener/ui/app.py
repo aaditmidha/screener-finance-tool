@@ -16,16 +16,92 @@ from pathlib import Path
 from typing import Any
 
 from screener.config import CONFIG
-from screener.database.engine import build_engine, get_session_factory
+from screener.database.engine import build_engine, ensure_schema, get_session_factory
 from screener.exporters import model_workbook
 from screener.exporters.tearsheet import TearsheetInput, generate_tearsheet
-from screener.models import beneish_adapter, custom_screener, pledge_monitor, working_capital as wc
+from screener.models import (
+    beneish_adapter,
+    custom_screener,
+    forensic_score,
+    operational,
+    pledge_monitor,
+    working_capital as wc,
+)
 from screener.models.peer_comparison import PeerComparison
 from screener.scraper.acquisition import CompanyDataService, search_companies
 from screener.scraper.parser import CompanyFinancials
 from screener.ui import components
 
 logger = logging.getLogger(__name__)
+
+# Custom theme/CSS — gives the dashboard a polished fintech look rather than
+# the default Streamlit chrome. Injected once per run.
+_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"], button, input, textarea { font-family: 'Inter', sans-serif; }
+
+/* Hide Streamlit chrome for a product feel */
+#MainMenu, footer { visibility: hidden; }
+[data-testid="stToolbar"] { right: 1rem; }
+.block-container { padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1180px; }
+
+/* Branded header */
+.app-header { margin-bottom: 0.4rem; }
+.app-title { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.5px; line-height: 1.1;
+  background: linear-gradient(90deg, #e6edf3 0%, #2dd4bf 120%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.app-title .mark { -webkit-text-fill-color: #2dd4bf; }
+.app-sub { color: #8b949e; font-size: 0.95rem; margin-top: 0.15rem; }
+.app-pills { margin-top: 0.7rem; display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { background: rgba(45,212,191,0.10); color: #2dd4bf; border: 1px solid rgba(45,212,191,0.30);
+  border-radius: 999px; padding: 3px 11px; font-size: 0.72rem; font-weight: 600; }
+
+/* Card-like bordered containers */
+[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px;
+  border-color: rgba(255,255,255,0.07) !important;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0));
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+
+/* Metric tiles */
+[data-testid="stMetric"] { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px; padding: 10px 14px; }
+[data-testid="stMetricValue"] { font-weight: 700; font-size: 1.4rem; }
+[data-testid="stMetricLabel"] { color: #8b949e; }
+
+/* Tabs as pills */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.stTabs [data-baseweb="tab"] { padding: 9px 15px; border-radius: 9px 9px 0 0; font-weight: 600; }
+.stTabs [aria-selected="true"] { background: rgba(45,212,191,0.12); color: #2dd4bf; }
+
+/* Buttons */
+.stButton > button, .stDownloadButton > button { border-radius: 10px; font-weight: 600;
+  border: 1px solid rgba(45,212,191,0.35); }
+.stDataFrame { border-radius: 10px; overflow: hidden; }
+</style>
+"""
+
+
+def _inject_css(st: Any) -> None:
+    """Inject the custom theme CSS once."""
+    st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def _render_header(st: Any) -> None:
+    """Render the branded gradient header with capability pills."""
+    pills = ["Forensic score", "Beneish M-Score", "Reverse DCF", "Earnings quality",
+             "Peer ranking", "Pledge monitor", "AI tearsheet", "Annual-report intelligence"]
+    pill_html = "".join(f'<span class="pill">{p}</span>' for p in pills)
+    st.markdown(
+        f"""
+        <div class="app-header">
+          <div class="app-title"><span class="mark">◆</span> Screener Forensic <span style="font-weight:600;">Intelligence</span></div>
+          <div class="app-sub">Beyond the numbers — forensic accounting, valuation and AR intelligence for Indian equities.</div>
+          <div class="app-pills">{pill_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -34,22 +110,23 @@ logger = logging.getLogger(__name__)
 def _build_service() -> CompanyDataService:
     """Construct a CompanyDataService backed by a fresh DB session."""
     engine = build_engine()
-    from screener.database.models import Base
-    Base.metadata.create_all(engine)
+    ensure_schema(engine)
     session = get_session_factory(engine)()
     return CompanyDataService(session)
 
 
-def _financials_to_excel_bytes(fin: CompanyFinancials) -> bytes:
+def _financials_to_excel_bytes(fin: CompanyFinancials, ar_rows: list, annual_rows: list) -> bytes:
     """Export the template-style model workbook as in-memory bytes.
 
     Args:
         fin: Parsed (and notes-enriched) company financials.
+        ar_rows: AR-extracted rows (adds AR sheets when present).
+        annual_rows: Stored annual rows (enables the discrepancy sheet).
 
     Returns:
         The workbook contents as bytes (for a Streamlit download button).
     """
-    return model_workbook.to_bytes(fin)
+    return model_workbook.to_bytes(fin, ar_rows=ar_rows or None, annual_rows=annual_rows or None)
 
 
 # --------------------------------------------------------------------------- #
@@ -66,33 +143,170 @@ def _render_statement_tab(st: Any, title: str, table: Any) -> None:
 
 def _render_peer_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
     """Run and display the ranked peer comparison."""
-    st.caption("Discovers sector peers from Screener and ranks them.")
+    st.caption("Discovers sector peers from Screener's peer table and ranks them "
+               "by ROCE, ROE, revenue growth and a composite score.")
     if not st.button("Run peer comparison", key="peer_btn"):
         return
     comparer = PeerComparison(
         company_repo=service._companies,           # reuse the service's repos
         annual_repo=service._annual,
-        fetch_page=service._fetch_page,
+        discover_peers=service.discover_peer_symbols,
         fetch_annual_data=service.get_annual_records,
     )
-    url = service._company_url(symbol)
+    progress = st.progress(0.0, text="Discovering peers…")
+
+    def _on_progress(sym: str, index: int, total: int) -> None:
+        progress.progress(index / total, text=f"Fetching {sym} ({index}/{total})…")
+
     try:
-        with st.spinner("Comparing peers…"):
-            ranked = comparer.compare(symbol, url)
+        ranked = comparer.compare(symbol, on_progress=_on_progress)
+        progress.empty()
         st.dataframe(ranked, use_container_width=True)
+    except ValueError as exc:                       # no comparable data gathered
+        progress.empty()
+        st.warning(f"No peer data available: {exc}")
     except Exception as exc:  # surface, don't crash the app
+        progress.empty()
         logger.exception("Peer comparison failed")
         st.error(f"Peer comparison failed: {exc}")
 
 
+def _render_annual_reports_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
+    """Surface AR-extracted data: exact figures, discrepancy, guidance, risks."""
+    import pandas as pd
+
+    from screener.models import ar_insights
+
+    company = service._companies.get_by_symbol(symbol)
+    ar_rows = service._ar.for_company(company.id) if company else []
+    if not ar_rows:
+        st.info(
+            "No Annual-Report data extracted yet. The AR pipeline runs **locally** "
+            "(Playwright + Groq) — run it to populate exact figures, then they "
+            "appear here and upgrade the Beneish score. See the README."
+        )
+        return
+
+    annual_rows = service._annual.for_company(company.id)
+    revenue_by_year = {r.fiscal_year_end.year: r.revenue for r in annual_rows if r.revenue}
+
+    st.caption("Exact figures parsed from the company's annual reports.")
+    exact = {
+        label: [getattr(r, attr, None) for r in ar_rows]
+        for label, attr in [("Revenue", "revenue"), ("PAT", "pat"), ("CFO", "cfo"),
+                            ("Trade receivables", "trade_receivables"),
+                            ("Total assets", "total_assets"), ("Total debt", "total_debt")]
+    }
+    years = [str(r.fiscal_year) for r in ar_rows]
+    st.dataframe(pd.DataFrame(exact, index=years).T, use_container_width=True)
+
+    cells = ar_insights.discrepancies(ar_rows, annual_rows)
+    worst = ar_insights.worst_discrepancies(cells)
+    if any(c.severity == "large" for c in worst):
+        st.error("⚠️ Large Screener-vs-AR discrepancy on a key metric — verify before relying on it.")
+    if cells:
+        st.subheader("Screener vs Annual Report")
+        st.dataframe(pd.DataFrame(
+            [{"Metric": c.metric, "Year": c.year, "Screener": c.screener,
+              "AR": c.ar, "Diff %": None if c.diff_pct is None else round(c.diff_pct * 100, 1),
+              "Severity": c.severity} for c in cells]
+        ), use_container_width=True)
+
+    scorecard = ar_insights.guidance_scorecard(ar_rows, revenue_by_year)
+    if scorecard is not None:
+        st.subheader("Management guidance vs delivery")
+        st.metric("Credibility score", f"{scorecard.score:.1f}/10",
+                  help=f"hit rate {scorecard.hit_rate:.0%}, bias {scorecard.bias:+.0%}")
+
+    timeline = ar_insights.risk_timeline(ar_rows)
+    if timeline:
+        st.subheader("Key-risk timeline")
+        st.dataframe(pd.DataFrame(
+            [{"Risk": e.risk, "First": e.first_year, "Last": e.last_year,
+              "Times mentioned": e.frequency} for e in timeline]
+        ), use_container_width=True)
+
+
+def _render_management_tab(st: Any, service: CompanyDataService, symbol: str,
+                           ar_rows: list, annual_rows: list) -> None:
+    """Render the management-credibility scorecard (guidance vs delivery)."""
+    from screener.models import ar_insights
+
+    st.caption("Scores management's guidance against what was actually delivered, "
+               "from Annual-Report data.")
+    if not ar_rows:
+        st.info("No Annual-Report data yet. Run the AR pipeline locally to extract "
+                "management guidance, then credibility scoring appears here.")
+        return
+
+    revenue_by_year = {r.fiscal_year_end.year: r.revenue for r in annual_rows if r.revenue}
+    scorecard = ar_insights.guidance_scorecard(ar_rows, revenue_by_year)
+    if scorecard is None:
+        st.info("No quantified guidance could be paired with actuals yet "
+                "(needs guidance from one year and the following year's result).")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Credibility", f"{scorecard.score:.1f}/10", scorecard.rating)
+    col2.metric("Hit rate", f"{scorecard.hit_rate:.0%}")
+    col3.metric("Bias", f"{scorecard.bias:+.0%}",
+                help="positive = under-promises/over-delivers")
+    st.caption(f"Based on {scorecard.evaluated} guidance item(s) with known outcomes.")
+
+
+def _render_operational_tab(st: Any, fin: CompanyFinancials) -> None:
+    """Render derived operational-efficiency metrics, or an info message."""
+    st.caption("Operating-efficiency metrics derived from the statements: margins, "
+               "turnover ratios, working-capital days and cash conversion.")
+    op = operational.compute(fin)
+    df = components.operational_to_df(op)
+    if df.empty:
+        st.info("Not enough data to derive operational metrics for this company.")
+    else:
+        st.dataframe(df, use_container_width=True)
+
+
+def _build_tearsheet_input(
+    symbol: str, name: str, fin: CompanyFinancials, pledge_history: list, ar_pair: tuple
+) -> TearsheetInput:
+    """Assemble a rich tearsheet input from the computed forensic signals."""
+    score = forensic_score.compute(fin, pledge_history=pledge_history or None)
+    metrics: dict[str, Any] = {
+        "forensic_score": f"{score.score:.0f}/100 ({score.verdict})",
+    }
+    for comp in score.components:
+        if comp.available:
+            metrics[comp.name] = comp.detail
+
+    ar_context: dict[str, Any] = {}
+    ar_current, _ar_prior = ar_pair
+    if ar_current is not None:
+        import json
+        for label, attr in [("Revenue", "revenue"), ("PAT", "pat"), ("CFO", "cfo"),
+                            ("Trade receivables", "trade_receivables")]:
+            val = getattr(ar_current, attr, None)
+            if val is not None:
+                ar_context[f"{label} (AR FY{ar_current.fiscal_year})"] = val
+        if getattr(ar_current, "guidance_raw_text", None):
+            ar_context["Management guidance"] = ar_current.guidance_raw_text
+        risks = getattr(ar_current, "key_risks", None)
+        if risks:
+            try:
+                ar_context["Key risks"] = ", ".join(json.loads(risks)[:3])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return TearsheetInput(symbol=symbol, name=name, metrics=metrics, ar_context=ar_context)
+
+
 def _render_tearsheet_tab(
-    st: Any, symbol: str, name: str, metrics: dict[str, Any]
+    st: Any, data: TearsheetInput
 ) -> None:
     """Generate and display the LLM tearsheet (needs GROQ_API_KEY)."""
     st.caption("Generates a 1-page plain-English summary via the Groq API.")
+    st.caption("✅ Enhanced with Annual Report data." if data.ar_enhanced
+               else "Using Screener data only (run the AR pipeline locally to enrich).")
     if not st.button("Generate tearsheet", key="ts_btn"):
         return
-    data = TearsheetInput(symbol=symbol, name=name, metrics=metrics)
     try:
         with st.spinner("Writing tearsheet…"):
             sheet = generate_tearsheet(data, make_pdf=True)
@@ -134,9 +348,28 @@ def _render_screener_tab(st: Any, service: CompanyDataService) -> None:
         st.error(str(exc))
 
 
-def _render_beneish(st: Any, fin: CompanyFinancials) -> None:
+def _render_forensic(st: Any, fin: CompanyFinancials, pledge_history: list) -> None:
+    """Render the composite forensic health score as a gauge + component tiles."""
+    score = forensic_score.compute(fin, pledge_history=pledge_history or None)
+    with st.container(border=True):
+        gauge_col, comp_col = st.columns([1, 1.3])
+        with gauge_col:
+            st.markdown("##### 🚦 Forensic health")
+            st.plotly_chart(components.build_forensic_gauge(score), use_container_width=True)
+        with comp_col:
+            st.markdown("##### Component breakdown")
+            grid = st.columns(2)
+            for i, comp in enumerate(score.components):
+                with grid[i % 2]:
+                    value = f"{comp.score:.0f}/100" if comp.available else "—"
+                    st.metric(comp.name.split(" (")[0], value, help=comp.detail)
+
+
+def _render_beneish(st: Any, fin: CompanyFinancials,
+                    ar_pair: tuple = (None, None)) -> None:
     """Render the Beneish M-Score with a red/green flag and data disclosure."""
-    sourcing = beneish_adapter.from_financials(fin)
+    ar_current, ar_prior = ar_pair
+    sourcing = beneish_adapter.from_financials(fin, ar_current=ar_current, ar_prior=ar_prior)
     result = sourcing.result if sourcing else None
     emoji, colour, caption = components.beneish_flag(result)
     st.markdown(
@@ -145,6 +378,8 @@ def _render_beneish(st: Any, fin: CompanyFinancials) -> None:
     )
     if sourcing:
         st.caption(f"Computed on {sourcing.periods[0]} → {sourcing.periods[1]} annuals.")
+        if sourcing.exact_ar:
+            st.caption(f"✅ Exact from Annual Report: {', '.join(sourcing.exact_ar)}.")
         note = components.data_quality_note(sourcing.approximated, sourcing.missing)
         if note:
             st.caption(f"ℹ️ {note}. Results directionally accurate — see DECISIONS.md §7.1.")
@@ -199,8 +434,9 @@ def main() -> None:
     from screener.logging_config import setup_logging
     setup_logging()
 
-    st.set_page_config(page_title="Screener Finance Tool", layout="wide")
-    st.title("Screener Finance Tool")
+    st.set_page_config(page_title="Screener Forensic Intelligence", layout="wide", page_icon="◆")
+    _inject_css(st)
+    _render_header(st)
 
     service = st.cache_resource(_build_service)()
 
@@ -237,28 +473,39 @@ def main() -> None:
             st.session_state["fin"] = service.refresh(symbol)
             st.session_state["loaded_symbol"] = symbol
     fin = st.session_state["fin"]
+    pledge_history = pledge_monitor.parse_pledge_history(service.last_html or "")
+    ar_pair = service.latest_ar_pair(symbol)
 
-    # --- Headline: Beneish flag + WC heatmap ------------------------------ #
+    # --- Headline: composite forensic score ------------------------------- #
+    _render_forensic(st, fin, pledge_history)
+
+    # --- Beneish flag + WC heatmap ---------------------------------------- #
     left, right = st.columns([1, 2])
     with left:
-        st.subheader("Earnings-manipulation check")
-        _render_beneish(st, fin)
+        with st.container(border=True):
+            st.markdown("##### 🔎 Earnings-manipulation check")
+            _render_beneish(st, fin, ar_pair=ar_pair)
     with right:
-        st.subheader("Working capital")
-        _render_wc_heatmap(st, fin)
+        with st.container(border=True):
+            st.markdown("##### 💧 Working capital")
+            _render_wc_heatmap(st, fin)
 
     # --- Excel download --------------------------------------------------- #
+    company = service._companies.get_by_symbol(symbol)
+    ar_rows = service._ar.for_company(company.id) if company else []
+    annual_rows = service._annual.for_company(company.id) if company else []
     st.download_button(
         "Download Excel model",
-        data=_financials_to_excel_bytes(fin),
+        data=_financials_to_excel_bytes(fin, ar_rows, annual_rows),
         file_name=f"{symbol}_model.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
     # --- Tabs ------------------------------------------------------------- #
-    annual, quarterly, ratios, peers, tearsheet, screener_tab, pledge = st.tabs(
-        ["Annual", "Quarterly", "Ratios", "Peer Compare", "Tearsheet",
-         "Custom Screener", "🚨 Pledge"]
+    (annual, quarterly, ratios, operational_tab, peers, tearsheet,
+     screener_tab, pledge, annual_reports, management) = st.tabs(
+        ["Annual", "Quarterly", "Ratios", "Operational Data", "Peer Compare",
+         "Tearsheet", "Custom Screener", "🚨 Pledge", "🧾 Annual Reports", "🎙 Management"]
     )
     with annual:
         _render_statement_tab(st, "annual P&L", fin.profit_loss)
@@ -268,14 +515,21 @@ def main() -> None:
         _render_statement_tab(st, "quarterly", fin.quarters)
     with ratios:
         _render_statement_tab(st, "ratios", fin.ratios)
+    with operational_tab:
+        _render_operational_tab(st, fin)
     with peers:
         _render_peer_tab(st, service, symbol)
     with tearsheet:
-        _render_tearsheet_tab(st, symbol, name or fin.name, metrics={})
+        _render_tearsheet_tab(st, _build_tearsheet_input(symbol, name or fin.name, fin,
+                                                          pledge_history, ar_pair))
     with screener_tab:
         _render_screener_tab(st, service)
     with pledge:
         _render_pledge_tab(st, service)
+    with annual_reports:
+        _render_annual_reports_tab(st, service, symbol)
+    with management:
+        _render_management_tab(st, service, symbol, ar_rows, annual_rows)
 
 
 if __name__ == "__main__":

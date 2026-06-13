@@ -178,6 +178,98 @@ def build_wc_heatmap_figure(heatmap: dict[str, list]) -> "object":
     return figure
 
 
+# Forensic verdict → (emoji, hex colour).
+_FORENSIC_STYLE = {
+    "healthy": ("🟢", "#27ae60"),
+    "watch": ("🟠", "#e67e22"),
+    "high_risk": ("🔴", "#c0392b"),
+}
+
+
+def forensic_badge(result: "object") -> tuple[str, str, str]:
+    """Return (emoji, colour, caption) for a ForensicScore.
+
+    Args:
+        result: A :class:`screener.models.forensic_score.ForensicScore`.
+
+    Returns:
+        Tuple of (badge emoji, hex colour, caption with score and verdict).
+    """
+    emoji, colour = _FORENSIC_STYLE.get(result.verdict, ("⚪", "#7f8c8d"))
+    caption = f"Forensic health {result.score:.0f}/100 — {result.verdict.replace('_', ' ')}"
+    return (emoji, colour, caption)
+
+
+def build_forensic_gauge(result: "object") -> "object":
+    """Build a Plotly gauge for the 0–100 forensic health score.
+
+    Args:
+        result: A :class:`screener.models.forensic_score.ForensicScore`.
+
+    Returns:
+        A ``plotly.graph_objects.Figure`` indicator gauge with red/amber/green
+        zones and the verdict-coloured needle.
+    """
+    import plotly.graph_objects as go
+
+    colour = _FORENSIC_STYLE.get(result.verdict, ("", "#7f8c8d"))[1]
+    figure = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=result.score,
+        number={"suffix": "/100", "font": {"size": 40, "color": colour}},
+        gauge={
+            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#8b949e"},
+            "bar": {"color": colour, "thickness": 0.28},
+            "bgcolor": "rgba(0,0,0,0)",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0, 50], "color": "rgba(192,57,43,0.22)"},
+                {"range": [50, 75], "color": "rgba(230,126,34,0.22)"},
+                {"range": [75, 100], "color": "rgba(39,174,96,0.22)"},
+            ],
+            "threshold": {"line": {"color": colour, "width": 4}, "thickness": 0.8,
+                          "value": result.score},
+        },
+    ))
+    figure.update_layout(
+        height=220, margin={"l": 24, "r": 24, "t": 16, "b": 8},
+        paper_bgcolor="rgba(0,0,0,0)", font={"color": "#e6edf3", "family": "Inter, sans-serif"},
+    )
+    return figure
+
+
+def _format_operational(value: float | None, fmt: str) -> str:
+    """Format one operational metric value for display per its unit hint."""
+    if value is None:
+        return "—"
+    if fmt == "pct":
+        return f"{value * 100:.1f}%"
+    if fmt == "x":
+        return f"{value:.2f}x"
+    if fmt == "days":
+        return f"{value:.0f}"
+    return f"{value:.2f}"
+
+
+def operational_to_df(op: "object") -> pd.DataFrame:
+    """Turn an OperationalData into a display DataFrame (metrics × periods).
+
+    Args:
+        op: A :class:`screener.models.operational.OperationalData`.
+
+    Returns:
+        DataFrame indexed by metric label with formatted string cells; empty
+        when no metrics were computable.
+    """
+    if not op.metrics:
+        return pd.DataFrame()
+    rows = {
+        m.label: [_format_operational(v, m.fmt) for v in m.values]
+        for m in op.metrics
+    }
+    return pd.DataFrame.from_dict(rows, orient="index", columns=op.periods)
+
+
 def data_quality_note(approximated: list[str], missing: list[str]) -> str:
     """Render data-sourcing disclosures as one human-readable line.
 

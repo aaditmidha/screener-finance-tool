@@ -49,6 +49,24 @@ class BeneishSourcing:
     periods: tuple[str, str]              # (prior, current) period labels
     approximated: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
+    exact_ar: list[str] = field(default_factory=list)   # fields taken from the Annual Report
+
+    @property
+    def uses_ar(self) -> bool:
+        """True if any input was upgraded to an exact Annual-Report figure."""
+        return bool(self.exact_ar)
+
+
+# BeneishYear attribute ← ARExtractedData attribute, with a display label.
+_AR_OVERRIDES = [
+    ("revenue", "revenue", "Revenue"),
+    ("receivables", "trade_receivables", "Trade receivables"),
+    ("total_assets", "total_assets", "Total assets"),
+    ("depreciation", "depreciation", "Depreciation"),
+    ("net_income", "pat", "Net income"),
+    ("cfo", "cfo", "CFO"),
+    ("long_term_debt", "total_debt", "Debt"),
+]
 
 
 def _col(table: FinancialTable | None, label_contains: str, index: int) -> float | None:
@@ -70,7 +88,11 @@ def _first(table: FinancialTable | None, index: int, *needles: str) -> float | N
     return None
 
 
-def from_financials(fin: CompanyFinancials) -> BeneishSourcing | None:
+def from_financials(
+    fin: CompanyFinancials,
+    ar_current: object | None = None,
+    ar_prior: object | None = None,
+) -> BeneishSourcing | None:
     """Compute the Beneish M-Score from parsed Screener statements.
 
     Uses the two most recent annual periods. Exact fields are used where the
@@ -78,8 +100,17 @@ def from_financials(fin: CompanyFinancials) -> BeneishSourcing | None:
     reported in the result. Fields absent outright are zeroed, which the core
     model turns into a neutral (1.0) contribution for that index only.
 
+    When matching Annual-Report rows are supplied (``ar_current``/``ar_prior``,
+    :class:`~screener.database.models.ARExtractedData`-like), their exact
+    figures (receivables, total assets, depreciation, PAT, CFO, debt, revenue)
+    override the Screener approximations — upgrading DSRI/TATA from neutral to
+    real — and are reported in ``exact_ar``. This is a *hybrid*: the Screener
+    base is kept for fields the AR doesn't expose (PPE, current items, SGA).
+
     Args:
         fin: Parsed company financials (annual P&L required).
+        ar_current: Optional AR-extracted row for the current (latest) year.
+        ar_prior: Optional AR-extracted row for the prior year.
 
     Returns:
         A BeneishSourcing with the score and data-quality notes, or None when
@@ -187,16 +218,37 @@ def from_financials(fin: CompanyFinancials) -> BeneishSourcing | None:
         logger.info("Beneish unavailable for %s: revenue/assets missing", fin.symbol)
         return None
 
+    # Hybrid upgrade: override Screener approximations with exact AR figures
+    # (only where both years are present, since indices are year-over-year).
+    exact_ar: list[str] = []
+    if ar_current is not None and ar_prior is not None:
+        for year_attr, ar_attr, label in _AR_OVERRIDES:
+            cur_val = getattr(ar_current, ar_attr, None)
+            pri_val = getattr(ar_prior, ar_attr, None)
+            if cur_val is not None and pri_val is not None:
+                setattr(current, year_attr, cur_val)
+                setattr(prior, year_attr, pri_val)
+                exact_ar.append(label)
+        # Drop notes the AR now satisfies exactly.
+        if "Trade receivables" in exact_ar:
+            missing = [m for m in missing if "receivable" not in m.lower()]
+        if "CFO" in exact_ar:
+            missing = [m for m in missing if "cfo" not in m.lower()]
+        if "Debt" in exact_ar:
+            approximated = [a for a in approximated if "debt" not in a.lower()]
+
     result = analyze(current, prior)
     sourcing = BeneishSourcing(
         result=result,
         periods=(pl.periods[-2], pl.periods[-1]),
         approximated=sorted(set(approximated)),
         missing=sorted(set(missing)),
+        exact_ar=sorted(set(exact_ar)),
     )
     logger.info(
-        "Beneish for %s [%s→%s]: M=%.2f (%s); approx=%d missing=%d",
+        "Beneish for %s [%s→%s]: M=%.2f (%s); approx=%d missing=%d exact_ar=%d",
         fin.symbol, sourcing.periods[0], sourcing.periods[1],
-        result.m_score, result.verdict, len(sourcing.approximated), len(sourcing.missing),
+        result.m_score, result.verdict, len(sourcing.approximated),
+        len(sourcing.missing), len(sourcing.exact_ar),
     )
     return sourcing

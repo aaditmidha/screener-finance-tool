@@ -20,11 +20,12 @@ from pathlib import Path
 from typing import Callable
 
 import openpyxl
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from screener.config import CONFIG
+from screener.models import ar_insights, operational
 from screener.scraper.parser import CompanyFinancials, FinancialTable
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class _Row:
     bold: bool = False
     pct: bool = False       # values are ratios → render as percentages
     is_header: bool = False  # group header — label only, no values
+    num_fmt: str | None = None  # explicit Excel number format (overrides pct/num)
 
 
 def _series(table: FinancialTable | None, *needles: str) -> list[float | None] | None:
@@ -218,19 +220,44 @@ def _write_sheet(ws: Worksheet, title: str, periods: list[str], rows: list[_Row]
                 if value is None:
                     continue
                 cell = ws.cell(r, col, value)
-                cell.number_format = _PCT_FMT if row.pct else _NUM_FMT
+                cell.number_format = row.num_fmt or (_PCT_FMT if row.pct else _NUM_FMT)
         r += 1
 
 
-def build_workbook(fin: CompanyFinancials) -> openpyxl.Workbook:
+def _operational_rows(op: "object") -> list[_Row]:
+    """Convert OperationalData metrics into formatted workbook rows.
+
+    Args:
+        op: A :class:`screener.models.operational.OperationalData`.
+
+    Returns:
+        One _Row per metric, with number formats matched to each unit
+        (percent, turnover ``x``, or whole days).
+    """
+    fmt_map = {"pct": (_PCT_FMT, True), "x": ('0.00"x"', False), "days": ("0", False)}
+    rows: list[_Row] = []
+    for metric in op.metrics:
+        num_fmt, pct = fmt_map.get(metric.fmt, (_NUM_FMT, False))
+        rows.append(_Row(metric.label, list(metric.values), pct=pct, num_fmt=num_fmt))
+    return rows
+
+
+def build_workbook(
+    fin: CompanyFinancials,
+    ar_rows: list | None = None,
+    annual_rows: list | None = None,
+) -> openpyxl.Workbook:
     """Assemble the full model workbook from parsed+enriched financials.
 
     Args:
         fin: Parsed company financials, ideally enriched with notes tables.
+        ar_rows: Optional ARExtractedData rows → adds AR Financials / Screener-
+            vs-AR / Risk Timeline sheets.
+        annual_rows: Optional AnnualData rows → enables the discrepancy sheet.
 
     Returns:
-        An openpyxl Workbook with PL, BS, CF, Quarterly and Notes sheets
-        (sheets with no data are omitted).
+        An openpyxl Workbook with PL/BS/CF/Quarterly/Operational/Notes sheets
+        (plus AR sheets when ar_rows is given); sheets with no data are omitted.
     """
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
@@ -247,6 +274,9 @@ def build_workbook(fin: CompanyFinancials) -> openpyxl.Workbook:
         sheet_specs.append(("CF", fin.cash_flow.periods, _statement_rows(fin.cash_flow)))
     if fin.quarters:
         sheet_specs.append(("Quarterly", fin.quarters.periods, _statement_rows(fin.quarters)))
+    op = operational.compute(fin)
+    if op.metrics:
+        sheet_specs.append(("Operational Data", op.periods, _operational_rows(op)))
     if fin.notes_pl:
         sheet_specs.append(("Notes PL", fin.notes_pl.periods, _notes_rows(fin.notes_pl)))
     if fin.notes_bs:
@@ -260,33 +290,112 @@ def build_workbook(fin: CompanyFinancials) -> openpyxl.Workbook:
         ws = wb.create_sheet(title=name)
         _write_sheet(ws, f"{company} — {name}", periods, rows)
 
+    _append_ar_sheets(wb, company, ar_rows, annual_rows)
+
     if not wb.sheetnames:  # degenerate input — keep the workbook valid
         wb.create_sheet(title="Empty")
     logger.info("Model workbook built for %s: %s", fin.symbol, wb.sheetnames)
     return wb
 
 
-def to_bytes(fin: CompanyFinancials) -> bytes:
+# AR exact-figure rows: (display label, ARExtractedData attr).
+_AR_SHEET_FIELDS = [
+    ("Revenue", "revenue"), ("EBITDA", "ebitda"), ("PAT", "pat"), ("CFO", "cfo"),
+    ("Capex", "capex"), ("Trade receivables", "trade_receivables"),
+    ("Inventory", "inventory"), ("Trade payables", "trade_payables"),
+    ("Total assets", "total_assets"), ("Total equity", "total_equity"),
+    ("Total debt", "total_debt"), ("Cash", "cash"), ("Depreciation", "depreciation"),
+    ("Interest expense", "interest_expense"), ("Tax expense", "tax_expense"),
+]
+_FILL_MODERATE = PatternFill("solid", fgColor="FFC000")
+_FILL_LARGE = PatternFill("solid", fgColor="FF7C80")
+
+
+def _write_table(ws: Worksheet, title: str, headers: list[str],
+                 rows: list[list], fills: list | None = None) -> None:
+    """Write a simple header + rows table, optionally filling whole rows."""
+    ws.cell(1, 1, title).font = _TITLE_FONT
+    for col, head in enumerate(headers, start=1):
+        cell = ws.cell(2, col, head)
+        cell.font = _BOLD
+        ws.column_dimensions[get_column_letter(col)].width = max(14, len(head) + 2)
+    ws.freeze_panes = "A3"
+    for r_off, row in enumerate(rows):
+        fill = fills[r_off] if fills else None
+        for col, value in enumerate(row, start=1):
+            cell = ws.cell(3 + r_off, col, value)
+            if fill is not None:
+                cell.fill = fill
+
+
+def _append_ar_sheets(wb: openpyxl.Workbook, company: str,
+                      ar_rows: list | None, annual_rows: list | None) -> None:
+    """Add the Annual-Report sheets when AR-extracted rows are available."""
+    if not ar_rows:
+        return
+    ordered = sorted(ar_rows, key=lambda r: r.fiscal_year)
+    years = [r.fiscal_year for r in ordered]
+
+    # Sheet: exact AR figures (metric × year).
+    rows = [
+        _Row(label, [getattr(r, attr, None) for r in ordered])
+        for label, attr in _AR_SHEET_FIELDS
+        if any(getattr(r, attr, None) is not None for r in ordered)
+    ]
+    if rows:
+        ws = wb.create_sheet(title="AR Financials")
+        _write_sheet(ws, f"{company} — Annual Report (exact figures)",
+                     [str(y) for y in years], rows)
+
+    # Sheet: Screener vs AR discrepancy (colour-flagged).
+    cells = ar_insights.discrepancies(ar_rows, annual_rows or [])
+    if cells:
+        table, fills = [], []
+        for c in cells:
+            table.append([c.metric, c.year, c.screener, c.ar,
+                          round(c.diff_pct, 4) if c.diff_pct is not None else None, c.severity])
+            fills.append(_FILL_LARGE if c.severity == "large"
+                         else _FILL_MODERATE if c.severity == "moderate" else None)
+        ws = wb.create_sheet(title="Screener vs AR")
+        _write_table(ws, f"{company} — Screener vs Annual Report",
+                     ["Metric", "Year", "Screener", "AR", "Diff %", "Severity"], table, fills)
+
+    # Sheet: multi-year risk timeline.
+    timeline = ar_insights.risk_timeline(ar_rows)
+    if timeline:
+        ws = wb.create_sheet(title="Risk Timeline")
+        _write_table(ws, f"{company} — Key-risk timeline",
+                     ["Risk", "First year", "Last year", "Frequency"],
+                     [[e.risk, e.first_year, e.last_year, e.frequency] for e in timeline])
+
+
+def to_bytes(fin: CompanyFinancials, ar_rows: list | None = None,
+             annual_rows: list | None = None) -> bytes:
     """Return the model workbook as in-memory bytes (for download buttons).
 
     Args:
         fin: Parsed company financials.
+        ar_rows: Optional ARExtractedData rows → adds AR sheets.
+        annual_rows: Optional AnnualData rows → enables the discrepancy sheet.
 
     Returns:
         The .xlsx file contents.
     """
     buffer = io.BytesIO()
-    build_workbook(fin).save(buffer)
+    build_workbook(fin, ar_rows=ar_rows, annual_rows=annual_rows).save(buffer)
     return buffer.getvalue()
 
 
-def export(fin: CompanyFinancials, filename: str, out_dir: Path | None = None) -> Path:
+def export(fin: CompanyFinancials, filename: str, out_dir: Path | None = None,
+           ar_rows: list | None = None, annual_rows: list | None = None) -> Path:
     """Write the model workbook to disk and return its path.
 
     Args:
         fin: Parsed company financials.
         filename: Output filename.
         out_dir: Output directory; defaults to the configured Excel export dir.
+        ar_rows: Optional ARExtractedData rows → adds AR sheets.
+        annual_rows: Optional AnnualData rows → enables the discrepancy sheet.
 
     Returns:
         Path to the written workbook.
@@ -294,6 +403,6 @@ def export(fin: CompanyFinancials, filename: str, out_dir: Path | None = None) -
     directory = out_dir or Path(_cfg["output_dir"])
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / filename
-    build_workbook(fin).save(path)
+    build_workbook(fin, ar_rows=ar_rows, annual_rows=annual_rows).save(path)
     logger.info("Model workbook exported: %s", path)
     return path

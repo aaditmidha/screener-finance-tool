@@ -159,6 +159,50 @@ class TestNotesEnrichment:
         assert any("cost %" in a for a in sourcing.approximated)
 
 
+class TestArHybrid:
+    """Exact AR figures must override Screener approximations."""
+
+    class _ARRow:
+        """ARExtractedData-like stub carrying exact figures."""
+
+        def __init__(self, **kw) -> None:
+            for field in ("revenue", "trade_receivables", "total_assets",
+                          "depreciation", "pat", "cfo", "total_debt"):
+                setattr(self, field, kw.get(field))
+
+    def test_ar_receivables_un_neutralise_dsri(self) -> None:
+        fin = parse_company_financials(_STANDARD)   # no receivables on page
+        base = from_financials(fin)
+        assert base.result.indices.dsri == 1.0      # neutral without AR
+
+        ar_cur = self._ARRow(trade_receivables=30_193, cfo=25_210, pat=26_233, total_assets=137_814)
+        ar_pri = self._ARRow(trade_receivables=25_424, cfo=22_467, pat=24_095, total_assets=125_816)
+        hybrid = from_financials(fin, ar_current=ar_cur, ar_prior=ar_pri)
+        # (30193/153670) / (25424/146767) ≈ 1.134 — now real
+        assert hybrid.result.indices.dsri == pytest.approx(1.134, abs=1e-3)
+
+    def test_exact_ar_reported_and_missing_cleared(self) -> None:
+        fin = parse_company_financials(_STANDARD)
+        ar_cur = self._ARRow(trade_receivables=30_193, cfo=25_210, pat=26_233)
+        ar_pri = self._ARRow(trade_receivables=25_424, cfo=22_467, pat=24_095)
+        hybrid = from_financials(fin, ar_current=ar_cur, ar_prior=ar_pri)
+        assert hybrid.uses_ar
+        assert "Trade receivables" in hybrid.exact_ar
+        assert not any("receivable" in m.lower() for m in hybrid.missing)
+
+    def test_partial_ar_only_overrides_present_fields(self) -> None:
+        fin = parse_company_financials(_STANDARD)
+        # Only receivables present in AR; prior missing cfo → cfo not overridden.
+        ar_cur = self._ARRow(trade_receivables=30_193)
+        ar_pri = self._ARRow(trade_receivables=25_424)
+        hybrid = from_financials(fin, ar_current=ar_cur, ar_prior=ar_pri)
+        assert hybrid.exact_ar == ["Trade receivables"]
+
+    def test_no_ar_behaves_as_before(self) -> None:
+        fin = parse_company_financials(_STANDARD)
+        assert from_financials(fin).exact_ar == []
+
+
 class TestInsufficientData:
     def test_single_period_returns_none(self) -> None:
         single = """<html><body><h1>X</h1>

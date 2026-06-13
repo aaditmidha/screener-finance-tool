@@ -95,6 +95,18 @@ class TestBuildPrompt:
         _system, user = build_prompt(bare)
         assert "Financials" not in user        # empty dict block dropped
         assert "Peer Ranking" not in user
+        assert "Annual Report data" not in user
+
+    def test_ar_context_included_when_present(self) -> None:
+        data = TearsheetInput(symbol="INFY", name="Infosys",
+                              ar_context={"Revenue (AR FY2024)": 153670})
+        _system, user = build_prompt(data)
+        assert "Annual Report data (exact figures)" in user
+        assert "153670" in user
+        assert data.ar_enhanced is True
+
+    def test_not_ar_enhanced_without_context(self) -> None:
+        assert TearsheetInput(symbol="X", name="X").ar_enhanced is False
 
 
 class TestGenerateSummary:

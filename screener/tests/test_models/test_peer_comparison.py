@@ -195,11 +195,9 @@ class TestOrchestration:
         def upsert(self, company_id: int, fiscal_year_end: date, **fields: object) -> None:
             self.rows.append((company_id, fiscal_year_end, fields))
 
-    _PEER_HTML = """
-        <a href="/company/TCS/">TCS</a>
-        <a href="/company/WIPRO/">Wipro</a>
-        <a href="/company/BADCO/">BadCo</a>
-    """
+    # The injected discovery callable returns peer symbols directly (the
+    # service resolves these from Screener's peers API).
+    _PEERS = ["TCS", "WIPRO", "BADCO"]
 
     def _data_for(self, symbol: str) -> tuple[str, list[Rec]]:
         table = {"INFY": INFY, "TCS": TCS, "WIPRO": WIPRO}
@@ -213,11 +211,11 @@ class TestOrchestration:
         comparer = PeerComparison(
             company_repo=company_repo,
             annual_repo=annual_repo,
-            fetch_page=lambda url: self._PEER_HTML,
+            discover_peers=lambda base: list(self._PEERS),
             fetch_annual_data=self._data_for,
         )
 
-        result = comparer.compare("INFY", "https://screener.test/company/INFY/")
+        result = comparer.compare("INFY")
 
         # Base + the two good peers ranked; BADCO skipped on fetch error.
         assert set(result.index) == {"INFY", "TCS", "WIPRO"}
@@ -227,12 +225,24 @@ class TestOrchestration:
         assert set(company_repo.calls) == {"INFY", "TCS", "WIPRO"}
         assert len(annual_repo.rows) == 12            # 3 companies × 4 years
 
+    def test_progress_callback_invoked_per_company(self) -> None:
+        seen: list[tuple[str, int, int]] = []
+        comparer = PeerComparison(
+            company_repo=self._FakeCompanyRepo(),
+            annual_repo=self._FakeAnnualRepo(),
+            discover_peers=lambda base: ["TCS", "WIPRO"],
+            fetch_annual_data=self._data_for,
+        )
+        comparer.compare("INFY", on_progress=lambda s, i, t: seen.append((s, i, t)))
+        assert seen[0] == ("INFY", 1, 3)
+        assert [s for s, _i, _t in seen] == ["INFY", "TCS", "WIPRO"]
+
     def test_compare_raises_when_nothing_gathered(self) -> None:
         comparer = PeerComparison(
             company_repo=self._FakeCompanyRepo(),
             annual_repo=self._FakeAnnualRepo(),
-            fetch_page=lambda url: "<html></html>",      # no peers
+            discover_peers=lambda base: [],              # no peers
             fetch_annual_data=lambda s: (s, []),         # no data
         )
         with pytest.raises(ValueError):
-            comparer.compare("INFY", "https://screener.test/company/INFY/")
+            comparer.compare("INFY")

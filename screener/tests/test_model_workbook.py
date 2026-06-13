@@ -2,6 +2,7 @@
 
 import io
 import json
+from dataclasses import dataclass
 
 import openpyxl
 import pytest
@@ -138,6 +139,87 @@ class TestNotesSheets:
                 assert ws.cell(r, 3).value == pytest.approx(2924.0)
                 return
         pytest.fail("Trade receivables row not found")
+
+
+class TestOperationalSheet:
+    def test_operational_sheet_present(self, workbook) -> None:
+        assert "Operational Data" in workbook.sheetnames
+
+    def test_operational_rows_and_formats(self, workbook) -> None:
+        ws = workbook["Operational Data"]
+        labels = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)]
+        assert any("margin" in (l or "").lower() for l in labels)
+        # A percent metric cell must carry a percent number format.
+        for r in range(3, ws.max_row + 1):
+            if ws.cell(r, 1).value == "EBITDA margin %":
+                assert ws.cell(r, 3).number_format == "0.0%"
+                return
+        pytest.fail("EBITDA margin row not found")
+
+
+class TestArSheets:
+    @dataclass
+    class _AR:
+        fiscal_year: int
+        revenue: float | None = None
+        pat: float | None = None
+        cfo: float | None = None
+        total_assets: float | None = None
+        total_debt: float | None = None
+        total_equity: float | None = None
+        ebitda: float | None = None
+        capex: float | None = None
+        trade_receivables: float | None = None
+        inventory: float | None = None
+        trade_payables: float | None = None
+        cash: float | None = None
+        depreciation: float | None = None
+        interest_expense: float | None = None
+        tax_expense: float | None = None
+        guided_revenue_growth: float | None = None
+        key_risks: object = None
+
+    @dataclass
+    class _Annual:
+        fiscal_year_end: object
+        revenue: float | None = None
+        net_income: float | None = None
+        total_assets: float | None = None
+        total_debt: float | None = None
+        shareholders_equity: float | None = None
+
+    def _book(self, enriched_fin):
+        import io
+        import json
+        from datetime import date
+        ar_rows = [
+            self._AR(2024, revenue=9000, pat=900, total_assets=12000,
+                     trade_receivables=1500, key_risks=json.dumps(["Input cost inflation"])),
+            self._AR(2025, revenue=11000, pat=600, total_assets=13000,
+                     trade_receivables=1600, key_risks=json.dumps(["Input cost inflation", "Forex"])),
+        ]
+        annual_rows = [self._Annual(date(2025, 3, 31), revenue=11000, net_income=1200,
+                                    total_assets=13000)]
+        data = model_workbook.to_bytes(enriched_fin, ar_rows=ar_rows, annual_rows=annual_rows)
+        return openpyxl.load_workbook(io.BytesIO(data))
+
+    def test_ar_sheets_present(self, enriched_fin) -> None:
+        wb = self._book(enriched_fin)
+        for name in ("AR Financials", "Screener vs AR", "Risk Timeline"):
+            assert name in wb.sheetnames
+
+    def test_discrepancy_flagged(self, enriched_fin) -> None:
+        wb = self._book(enriched_fin)
+        ws = wb["Screener vs AR"]
+        rows = [[ws.cell(r, c).value for c in range(1, 7)] for r in range(3, ws.max_row + 1)]
+        pat = next(r for r in rows if r[0] == "Net profit / PAT")
+        # AR PAT 600 vs Screener 1200 → -50% → large
+        assert pat[5] == "large"
+
+    def test_no_ar_rows_omits_sheets(self, enriched_fin) -> None:
+        import io
+        wb = openpyxl.load_workbook(io.BytesIO(model_workbook.to_bytes(enriched_fin)))
+        assert "AR Financials" not in wb.sheetnames
 
 
 class TestRobustness:

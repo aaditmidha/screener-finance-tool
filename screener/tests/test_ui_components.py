@@ -94,6 +94,33 @@ class TestFormatFreshness:
         assert "30m ago" in components.format_freshness(updated, now=now)
 
 
+class TestOperationalToDf:
+    def _op(self):
+        from screener.models.operational import OperationalData, OperationalMetric
+        return OperationalData(
+            periods=["Mar 2024", "Mar 2025"],
+            metrics=[
+                OperationalMetric("EBITDA margin %", [0.20, None], "pct"),
+                OperationalMetric("Asset turnover", [0.83, 1.10], "x"),
+                OperationalMetric("Receivable days", [58.4, 60.0], "days"),
+            ],
+        )
+
+    def test_formats_by_unit(self) -> None:
+        df = components.operational_to_df(self._op())
+        assert df.loc["EBITDA margin %", "Mar 2024"] == "20.0%"
+        assert df.loc["Asset turnover", "Mar 2025"] == "1.10x"
+        assert df.loc["Receivable days", "Mar 2024"] == "58"
+
+    def test_none_rendered_as_dash(self) -> None:
+        df = components.operational_to_df(self._op())
+        assert df.loc["EBITDA margin %", "Mar 2025"] == "—"
+
+    def test_empty_when_no_metrics(self) -> None:
+        from screener.models.operational import OperationalData
+        assert components.operational_to_df(OperationalData(periods=[], metrics=[])).empty
+
+
 class TestDataQualityNote:
     def test_empty_when_all_exact(self) -> None:
         assert components.data_quality_note([], []) == ""
@@ -104,6 +131,29 @@ class TestDataQualityNote:
         )
         assert "Approximated" in note and "COGS" in note
         assert "Unavailable" in note and "receivables" in note
+
+
+class TestForensicBadge:
+    def _score(self, verdict: str, score: float):
+        from screener.models.forensic_score import ForensicScore
+        return ForensicScore(score=score, verdict=verdict, components=[])
+
+    def test_healthy_green(self) -> None:
+        emoji, _c, caption = components.forensic_badge(self._score("healthy", 82))
+        assert emoji == "🟢"
+        assert "82/100" in caption
+
+    def test_high_risk_red(self) -> None:
+        emoji, _c, caption = components.forensic_badge(self._score("high_risk", 30))
+        assert emoji == "🔴"
+        assert "high risk" in caption
+
+    def test_gauge_reflects_score(self) -> None:
+        figure = components.build_forensic_gauge(self._score("watch", 66))
+        assert figure.data[0].type == "indicator"
+        assert figure.data[0].value == 66
+        # three coloured zones (red/amber/green)
+        assert len(figure.data[0].gauge.steps) == 3
 
 
 class TestPledgeComponents:

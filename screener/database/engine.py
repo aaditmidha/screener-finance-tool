@@ -1,9 +1,9 @@
-"""SQLAlchemy engine and session factory."""
+"""SQLAlchemy engine, session factory, and lightweight schema migration."""
 
 import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine, Engine
+from sqlalchemy import create_engine, Engine, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from screener.config import CONFIG
@@ -27,6 +27,36 @@ def build_engine(db_path: str | None = None) -> Engine:
     engine = create_engine(url, echo=echo, future=True)
     logger.info("Database engine created: %s", url)
     return engine
+
+
+def ensure_schema(engine: Engine) -> None:
+    """Create missing tables and add any missing (additive) columns.
+
+    The project has no migration framework (it's a single-user cache DB), so a
+    pre-existing database can lag the ORM after a model change.
+    :func:`Base.metadata.create_all` adds new *tables* but never new *columns*
+    on existing ones — so this also runs ``ALTER TABLE ... ADD COLUMN`` for any
+    ORM column missing from an existing table. All schema changes to date have
+    been additive and nullable, which SQLite's ADD COLUMN supports safely.
+
+    Args:
+        engine: The SQLAlchemy engine to migrate in place.
+    """
+    from screener.database.models import Base
+
+    Base.metadata.create_all(engine)
+    inspector = inspect(engine)
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        existing = {col["name"] for col in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            col_type = column.type.compile(dialect=engine.dialect)
+            with engine.begin() as conn:
+                conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {column.name} {col_type}'))
+            logger.info("Schema migration: added %s.%s (%s)", table.name, column.name, col_type)
 
 
 def get_session_factory(engine: Engine) -> sessionmaker[Session]:
