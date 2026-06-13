@@ -96,7 +96,7 @@ def _index(current: float | None, prior: float | None, name: str) -> float:
         current / prior, or 1.0 when either input is missing or prior is 0.
     """
     if current is None or prior is None or prior == 0:
-        logger.warning("Beneish %s undefined (zero denominator); using neutral 1.0", name)
+        logger.debug("Beneish %s undefined (zero denominator); using neutral 1.0", name)
         return 1.0
     return current / prior
 
@@ -162,7 +162,7 @@ def compute_indices(current: BeneishYear, prior: BeneishYear) -> BeneishIndices:
     # TATA — accruals (earnings not backed by cash) over total assets.
     tata_ratio = _safe_div(current.net_income - current.cfo, current.total_assets)
     if tata_ratio is None:
-        logger.warning("Beneish TATA undefined (zero total assets); using 0.0")
+        logger.debug("Beneish TATA undefined (zero total assets); using 0.0")
         tata_ratio = 0.0
 
     return BeneishIndices(
