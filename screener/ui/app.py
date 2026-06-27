@@ -206,6 +206,8 @@ def _stage_uploads(ar_files: list, q_files: list, c_files: list) -> list:
 
 def _render_upload_tab(st: Any, service: CompanyDataService, symbol: str, name: str) -> None:
     """Upload ARs / quarterlies / concalls; extract and update the analysis."""
+    import pandas as pd
+
     from screener.scraper import document_ingest
 
     limits = CONFIG["uploads"]
@@ -213,6 +215,16 @@ def _render_upload_tab(st: Any, service: CompanyDataService, symbol: str, name: 
                "the 🧾 Annual Reports and 🎙 Management tabs. Name files with the year "
                "(e.g. `AR_FY24.pdf`, `Q1FY26.pdf`) so they're tagged correctly. "
                "Extraction uses Groq (set `GROQ_API_KEY`) with a regex fallback.")
+
+    # Show the result of a just-completed ingest (we re-ran the whole app after
+    # ingesting so every other tab re-read the fresh AR data from the DB).
+    last = st.session_state.get("ingest_results")
+    if last and last.get("symbol") == symbol:
+        ok = sum(1 for r in last["rows"] if r["status"] == "ingested")
+        st.success(f"Extracted {ok}/{len(last['rows'])} document(s). The 🧾 Annual Reports / "
+                   "🎙 Management tabs and the AR-upgraded Beneish now reflect this data.")
+        st.dataframe(pd.DataFrame(last["rows"]), use_container_width=True)
+
     ar_files = st.file_uploader(f"📄 Annual reports (up to {limits['max_annual_reports']})",
                                 type="pdf", accept_multiple_files=True, key="up_ar")
     q_files = st.file_uploader(f"📊 Quarterly filings (up to {limits['max_quarterly']})",
@@ -227,7 +239,6 @@ def _render_upload_tab(st: Any, service: CompanyDataService, symbol: str, name: 
         st.warning("Upload at least one PDF first.")
         return
 
-    import pandas as pd
     with st.status(f"Extracting {len(docs)} document(s)…", expanded=True) as status:
         results = document_ingest.ingest(service._session, symbol, docs, company_name=name)
         for r in results:
@@ -235,9 +246,11 @@ def _render_upload_tab(st: Any, service: CompanyDataService, symbol: str, name: 
         ok = sum(1 for r in results if r["status"] == "ingested")
         status.update(label=f"Extracted {ok}/{len(results)} document(s)", state="complete")
 
-    st.dataframe(pd.DataFrame(results), use_container_width=True)
-    st.success("Analysis updated — open the 🧾 Annual Reports / 🎙 Management tabs "
-               "(or reload the company) to see the enhanced figures.")
+    # Re-run the whole script so EVERY tab re-reads the freshly-ingested AR data.
+    # st.tabs renders all panels in a single run, so without a rerun the other
+    # tabs keep showing their pre-ingest (empty) state until the next interaction.
+    st.session_state["ingest_results"] = {"symbol": symbol, "rows": results}
+    st.rerun()
 
 
 def _render_annual_reports_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
