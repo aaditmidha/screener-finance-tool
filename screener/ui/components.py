@@ -26,11 +26,12 @@ _BENEISH_STYLE = {
 }
 
 
-# Shared Plotly layout for a consistent dark, branded look across charts.
+# Shared Plotly layout — transparent bg + a neutral slate font that stays
+# legible on both the light and dark app themes.
 _PLOTLY_LAYOUT = {
     "paper_bgcolor": "rgba(0,0,0,0)",
     "plot_bgcolor": "rgba(0,0,0,0)",
-    "font": {"color": "#e6edf3", "family": "Inter, sans-serif"},
+    "font": {"color": "#64748b", "family": "Inter, sans-serif"},
     "margin": {"l": 40, "r": 20, "t": 50, "b": 30},
 }
 
@@ -299,7 +300,7 @@ def build_forensic_gauge(result: "object") -> "object":
     ))
     figure.update_layout(
         height=220, margin={"l": 24, "r": 24, "t": 16, "b": 8},
-        paper_bgcolor="rgba(0,0,0,0)", font={"color": "#e6edf3", "family": "Inter, sans-serif"},
+        paper_bgcolor="rgba(0,0,0,0)", font={"color": "#64748b", "family": "Inter, sans-serif"},
     )
     return figure
 

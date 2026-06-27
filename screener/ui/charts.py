@@ -12,11 +12,12 @@ from screener.scraper.parser import CompanyFinancials, FinancialTable
 
 logger = logging.getLogger(__name__)
 
-# Shared dark, branded layout (kept local to avoid importing UI internals).
+# Shared branded layout (kept local to avoid importing UI internals).
+# Neutral slate font stays legible on both light and dark app themes.
 _LAYOUT = {
     "paper_bgcolor": "rgba(0,0,0,0)",
     "plot_bgcolor": "rgba(0,0,0,0)",
-    "font": {"color": "#e6edf3", "family": "Inter, sans-serif"},
+    "font": {"color": "#64748b", "family": "Inter, sans-serif"},
     "margin": {"l": 45, "r": 20, "t": 50, "b": 40},
     "height": 300,
     "legend": {"orientation": "h", "y": -0.2},

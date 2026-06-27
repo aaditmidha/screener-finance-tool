@@ -34,74 +34,97 @@ from screener.ui import charts, components
 
 logger = logging.getLogger(__name__)
 
-# Custom theme/CSS — gives the dashboard a polished fintech look rather than
-# the default Streamlit chrome. Injected once per run.
-_CSS = """
-<style>
+# Brand accent (blue, per the template) and light/dark palettes.
+_ACCENT = "#2f6bff"
+_ACCENT_DARK = "#1d4ed8"
+_PALETTES = {
+    True: {"bg": "#0b1220", "surface": "#131c31", "surface2": "#1a2540",
+           "text": "#e6edf3", "muted": "#94a3b8", "border": "rgba(255,255,255,0.08)"},
+    False: {"bg": "#eef2f8", "surface": "#ffffff", "surface2": "#f6f9fd",
+            "text": "#1e293b", "muted": "#64748b", "border": "rgba(15,23,42,0.10)"},
+}
+# Gradients for the summary "cards" (like the template's credit cards).
+_CARD_GRADIENTS = [
+    "linear-gradient(135deg,#2f6bff,#1d4ed8)",
+    "linear-gradient(135deg,#7c3aed,#5b21b6)",
+    "linear-gradient(135deg,#0ea5e9,#0369a1)",
+    "linear-gradient(135deg,#f43f5e,#be123c)",
+]
+
+
+def _inject_theme(st: Any, dark: bool) -> None:
+    """Inject the theme CSS for the chosen light/dark mode."""
+    p = _PALETTES[dark]
+    css = f"""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-html, body, [class*="css"], button, input, textarea { font-family: 'Inter', sans-serif; }
+html, body, [class*="css"], button, input, textarea {{ font-family: 'Inter', sans-serif; }}
+#MainMenu, footer, [data-testid="stToolbar"] {{ visibility: hidden; }}
+.stApp {{ background: {p['bg']}; }}
+/* Streamlit's fixed header bar — match the app bg so it isn't a stray light strip in dark mode. */
+[data-testid="stHeader"] {{ background: {p['bg']}; }}
+.block-container {{ padding-top: 2.4rem; padding-bottom: 3rem; max-width: 1240px; }}
+.stApp, .stApp p, .stApp li, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
+.stApp label, [data-testid="stMarkdownContainer"] {{ color: {p['text']}; }}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * {{ color: {p['muted']} !important; }}
 
-/* Hide Streamlit chrome for a product feel */
-#MainMenu, footer { visibility: hidden; }
-[data-testid="stToolbar"] { right: 1rem; }
-.block-container { padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1180px; }
-
-/* Branded header */
-.app-header { margin-bottom: 0.4rem; }
-.app-title { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.5px; line-height: 1.1;
-  background: linear-gradient(90deg, #e6edf3 0%, #2dd4bf 120%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.app-title .mark { -webkit-text-fill-color: #2dd4bf; }
-.app-sub { color: #8b949e; font-size: 0.95rem; margin-top: 0.15rem; }
-.app-pills { margin-top: 0.7rem; display: flex; flex-wrap: wrap; gap: 6px; }
-.pill { background: rgba(45,212,191,0.10); color: #2dd4bf; border: 1px solid rgba(45,212,191,0.30);
-  border-radius: 999px; padding: 3px 11px; font-size: 0.72rem; font-weight: 600; }
+/* Brand-blue sidebar (always) */
+[data-testid="stSidebar"] {{ background: linear-gradient(180deg, {_ACCENT} 0%, {_ACCENT_DARK} 100%);
+  border: none; }}
+[data-testid="stSidebar"] * {{ color: #ffffff !important; }}
+[data-testid="stSidebar"] [data-baseweb="input"], [data-testid="stSidebar"] [data-baseweb="select"] > div {{
+  background: rgba(255,255,255,0.16) !important; border: none !important; border-radius: 10px; }}
+[data-testid="stSidebar"] input {{ color: #fff !important; }}
+[data-testid="stSidebar"] input::placeholder {{ color: rgba(255,255,255,0.75) !important; }}
 
 /* Card-like bordered containers */
-[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px;
-  border-color: rgba(255,255,255,0.07) !important;
-  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0));
-  box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+[data-testid="stVerticalBlockBorderWrapper"] {{ border-radius: 16px;
+  border: 1px solid {p['border']} !important; background: {p['surface']};
+  box-shadow: 0 2px 10px rgba(2,12,40,0.08); }}
 
 /* Metric tiles */
-[data-testid="stMetric"] { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 12px; padding: 10px 14px; }
-[data-testid="stMetricValue"] { font-weight: 700; font-size: 1.4rem; }
-[data-testid="stMetricLabel"] { color: #8b949e; }
+[data-testid="stMetric"] {{ background: {p['surface2']}; border: 1px solid {p['border']};
+  border-radius: 14px; padding: 12px 16px; }}
+[data-testid="stMetricValue"] {{ font-weight: 700; font-size: 1.45rem; color: {p['text']}; }}
+[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] * {{ color: {p['muted']} !important; }}
 
-/* Tabs as pills */
-.stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid rgba(255,255,255,0.06); }
-.stTabs [data-baseweb="tab"] { padding: 9px 15px; border-radius: 9px 9px 0 0; font-weight: 600; }
-.stTabs [aria-selected="true"] { background: rgba(45,212,191,0.12); color: #2dd4bf; }
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 1px solid {p['border']}; }}
+.stTabs [data-baseweb="tab"] {{ padding: 9px 15px; border-radius: 10px 10px 0 0; font-weight: 600;
+  color: {p['muted']}; }}
+.stTabs [aria-selected="true"] {{ background: rgba(47,107,255,0.14); color: {_ACCENT}; }}
 
 /* Buttons */
-.stButton > button, .stDownloadButton > button { border-radius: 10px; font-weight: 600;
-  border: 1px solid rgba(45,212,191,0.35); }
-.stDataFrame { border-radius: 10px; overflow: hidden; }
-</style>
-"""
+.stButton > button, .stDownloadButton > button {{ border-radius: 10px; font-weight: 600;
+  background: {_ACCENT}; color: #fff !important; border: none; }}
+.stButton > button:hover, .stDownloadButton > button:hover {{ background: {_ACCENT_DARK}; }}
+.stButton > button p, .stDownloadButton > button p {{ color: #fff !important; }}
+
+/* Summary gradient cards */
+.kpi-row {{ display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 16px; }}
+.kpi-card {{ flex: 1; min-width: 150px; border-radius: 16px; padding: 16px 18px;
+  box-shadow: 0 8px 18px rgba(2,12,40,0.18); }}
+.kpi-card * {{ color: #fff !important; }}
+.kpi-card .kpi-label {{ font-size: 0.76rem; opacity: 0.9; letter-spacing: 0.3px; }}
+.kpi-card .kpi-value {{ font-size: 1.5rem; font-weight: 800; margin-top: 3px; }}
+
+/* Brand block in the sidebar */
+.brand {{ display:flex; align-items:center; gap:10px; padding: 2px 0 12px; }}
+.brand .logo {{ font-size: 1.6rem; }}
+.brand .name {{ font-weight: 800; font-size: 1.1rem; line-height:1.05; }}
+.brand .tag {{ font-size: 0.68rem; opacity: 0.85; }}
+.overview-title {{ font-size: 1.6rem; font-weight: 800; margin-bottom: 0.1rem; }}
+</style>"""
+    st.markdown(css, unsafe_allow_html=True)
 
 
-def _inject_css(st: Any) -> None:
-    """Inject the custom theme CSS once."""
-    st.markdown(_CSS, unsafe_allow_html=True)
-
-
-def _render_header(st: Any) -> None:
-    """Render the branded gradient header with capability pills."""
-    pills = ["Forensic score", "Beneish M-Score", "Reverse DCF", "Earnings quality",
-             "Peer ranking", "Pledge monitor", "AI tearsheet", "Annual-report intelligence"]
-    pill_html = "".join(f'<span class="pill">{p}</span>' for p in pills)
-    st.markdown(
-        f"""
-        <div class="app-header">
-          <div class="app-title"><span class="mark">◆</span> Screener Forensic <span style="font-weight:600;">Intelligence</span></div>
-          <div class="app-sub">Beyond the numbers — forensic accounting, valuation and AR intelligence for Indian equities.</div>
-          <div class="app-pills">{pill_html}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+def _render_kpi_cards(st: Any, kpis: list[tuple[str, str]]) -> None:
+    """Render the headline KPIs as coloured gradient cards (template style)."""
+    cards = "".join(
+        f'<div class="kpi-card" style="background:{_CARD_GRADIENTS[i % len(_CARD_GRADIENTS)]}">'
+        f'<div class="kpi-label">{label}</div><div class="kpi-value">{value}</div></div>'
+        for i, (label, value) in enumerate(kpis)
     )
+    st.markdown(f'<div class="kpi-row">{cards}</div>', unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -561,35 +584,55 @@ def main() -> None:
     setup_logging()
 
     st.set_page_config(page_title="Screener Forensic Intelligence", layout="wide", page_icon="◆")
-    _inject_css(st)
-    _render_header(st)
+
+    dark = st.session_state.get("dark_mode", False)
+    _inject_theme(st, dark)
 
     engine = st.cache_resource(_cached_engine)()
     service = CompanyDataService(get_session_factory(engine)())
 
-    # --- Search with autocomplete ----------------------------------------- #
     @st.cache_data(ttl=300, show_spinner=False)
     def _cached_search(q: str):
         """Cache autocomplete hits so tab-click reruns don't re-query Screener."""
         return search_companies(q)
 
-    query = st.text_input("Search company", placeholder="e.g. Infosys, CG Power…")
+    # --- Sidebar: brand, light/dark toggle, company search ---------------- #
     symbol: str | None = None
     name: str = ""
-    if query:
-        matches = _cached_search(query)
-        if matches:
-            labels = [f"{m.name} ({m.symbol})" for m in matches]
-            chosen = st.selectbox("Matches", labels)
-            picked = matches[labels.index(chosen)]
-            symbol, name = picked.symbol, picked.name
-        else:
-            st.warning("No matches found.")
+    with st.sidebar:
+        st.markdown(
+            '<div class="brand"><span class="logo">◆</span>'
+            '<span><span class="name">Screener Forensic</span><br>'
+            '<span class="tag">Intelligence for Indian equities</span></span></div>',
+            unsafe_allow_html=True,
+        )
+        new_dark = st.toggle("🌙 Dark mode", value=dark, key="dark_toggle")
+        if new_dark != dark:
+            st.session_state["dark_mode"] = new_dark
+            st.rerun()
+        st.markdown("---")
+        query = st.text_input("🔎 Search company", placeholder="Infosys, CG Power…")
+        if query:
+            matches = _cached_search(query)
+            if matches:
+                labels = [f"{m.name} ({m.symbol})" for m in matches]
+                chosen = st.selectbox("Matches", labels)
+                picked = matches[labels.index(chosen)]
+                symbol, name = picked.symbol, picked.name
+            else:
+                st.warning("No matches found.")
+        st.markdown("---")
+        st.caption("Forensic score · Beneish · Reverse DCF · Earnings quality · "
+                   "Peer ranking · Pledge · AI tearsheet · AR intelligence")
 
     if not symbol:
+        st.markdown('<div class="overview-title">Welcome 👋</div>', unsafe_allow_html=True)
+        st.caption("Search for an Indian listed company in the sidebar to begin your analysis.")
         st.stop()
 
-    # --- Freshness indicator ---------------------------------------------- #
+    # --- Overview header --------------------------------------------------- #
+    st.markdown(f'<div class="overview-title">{name or symbol} · Overview</div>',
+                unsafe_allow_html=True)
     st.caption(f"Data freshness: {components.format_freshness(service.freshness(symbol))}")
 
     # Refresh once per selected symbol; tab clicks rerun the script but must
@@ -606,12 +649,10 @@ def main() -> None:
     pledge_history = pledge_monitor.parse_pledge_history(service.last_html or "")
     ar_pair = service.latest_ar_pair(symbol)
 
-    # --- KPI overview strip ----------------------------------------------- #
+    # --- KPI overview strip (gradient cards) ------------------------------ #
     kpis = components.headline_kpis(fin)
     if kpis:
-        cols = st.columns(len(kpis))
-        for col, (label, value) in zip(cols, kpis):
-            col.metric(label, value)
+        _render_kpi_cards(st, kpis)
 
     # --- Headline: composite forensic score ------------------------------- #
     _render_forensic(st, fin, pledge_history)
