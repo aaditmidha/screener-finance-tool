@@ -31,6 +31,8 @@ _PAGE = """
   <section id="balance-sheet"><table>
     <thead><tr><th></th><th>Mar 2025</th><th>Mar 2026</th></tr></thead>
     <tbody>
+      <tr><td>Equity Capital</td><td>200</td><td>200</td></tr>
+      <tr><td>Reserves</td><td>3,800</td><td>4,800</td></tr>
       <tr><td>Borrowings +</td><td>900</td><td>700</td></tr>
       <tr><td>Other Assets +</td><td>3,100</td><td>4,200</td></tr>
       <tr><td>Total Assets</td><td>7,000</td><td>9,000</td></tr>
@@ -220,6 +222,30 @@ class TestArSheets:
         import io
         wb = openpyxl.load_workbook(io.BytesIO(model_workbook.to_bytes(enriched_fin)))
         assert "AR Financials" not in wb.sheetnames
+
+
+class TestOutputAndChartsSheets:
+    def test_output_sheet_first_and_has_summary_rows(self, workbook) -> None:
+        assert workbook.sheetnames[0] == "Output Sheet"
+        ws = workbook["Output Sheet"]
+        labels = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)]
+        for expected in ("Revenue", "Revenue growth %", "EBITDA margin %", "PAT",
+                         "ROCE %", "ROE %", "Debt / Equity"):
+            assert any(expected == l for l in labels), f"missing {expected}"
+
+    def test_output_roce_value(self, workbook) -> None:
+        ws = workbook["Output Sheet"]
+        for r in range(3, ws.max_row + 1):
+            if ws.cell(r, 1).value == "ROCE %":
+                # FY26: EBIT 1500-220=1280; capital employed 200+4800+700=5700 → 22.5%
+                assert ws.cell(r, 3).value == pytest.approx(0.2246, abs=1e-3)
+                assert ws.cell(r, 3).number_format == "0.0%"
+                return
+        pytest.fail("ROCE row not found")
+
+    def test_charts_sheet_has_images(self, workbook) -> None:
+        assert "Charts" in workbook.sheetnames
+        assert len(workbook["Charts"]._images) >= 1   # embedded focus charts
 
 
 class TestRobustness:

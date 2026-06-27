@@ -242,6 +242,93 @@ def _operational_rows(op: "object") -> list[_Row]:
     return rows
 
 
+# Operational metrics surfaced on the Output Sheet (label → already in operational).
+_OUTPUT_OP_METRICS = [
+    "Asset turnover", "Receivable days", "Inventory days", "Payable days",
+    "Cash conversion cycle (days)", "CFO / PAT",
+]
+# operational fmt → Excel number format / pct flag.
+_OP_FMT = {"pct": (None, True), "x": ('0.00"x"', False), "days": ("0", False)}
+
+
+def _output_rows(fin: CompanyFinancials) -> list[_Row]:
+    """Build the Output Sheet — a one-look summary dashboard.
+
+    Growth, margins, returns (ROCE/ROE), leverage and working-capital metrics
+    across all periods, mirroring the reference models' Output/Summary sheet.
+
+    Args:
+        fin: Parsed company financials.
+
+    Returns:
+        Ordered _Row list; empty if there is no P&L.
+    """
+    pl, bs = fin.profit_loss, fin.balance_sheet
+    if pl is None:
+        return []
+    rev = _series(pl, "sales", "revenue")
+    op = _series(pl, "operating profit")
+    dep = _series(pl, "depreciation")
+    pat = _series(pl, "net profit", "profit after tax")
+    eps = _series(pl, "eps")
+    ebit = _combine(lambda o, d: o - d, op, dep)
+    equity = _combine(lambda a, b: a + b,
+                      _series(bs, "equity capital", "share capital"), _series(bs, "reserves"))
+    debt = _series(bs, "borrowings", "debt")
+    cap_employed = _combine(lambda e, d: e + d, equity, debt) if equity and debt else equity
+
+    op_data = {m.label: (m.values, m.fmt) for m in operational.compute(fin).metrics}
+    rows: list[_Row] = []
+
+    def add(label, values, fmt="num", bold=False):
+        if values and any(v is not None for v in values):
+            num_fmt, pct = _OP_FMT.get(fmt, (None, fmt == "pct"))
+            if fmt == "de":
+                num_fmt = "0.00"
+            rows.append(_Row(label, list(values), bold=bold, pct=pct, num_fmt=num_fmt))
+
+    add("Revenue", rev, "num", bold=True)
+    add("Revenue growth %", _yoy(rev), "pct")
+    add("EBITDA", op, "num")
+    add("EBITDA margin %", _ratio(op, rev), "pct")
+    add("EBIT", ebit, "num")
+    add("EBIT margin %", _ratio(ebit, rev), "pct")
+    add("PAT", pat, "num", bold=True)
+    add("PAT margin %", _ratio(pat, rev), "pct")
+    add("EPS", eps, "num")
+    add("ROCE %", _ratio(ebit, cap_employed), "pct")
+    add("ROE %", _ratio(pat, equity), "pct")
+    add("Debt / Equity", _ratio(debt, equity), "de")
+    for label in _OUTPUT_OP_METRICS:
+        if label in op_data:
+            values, fmt = op_data[label]
+            add(label, values, fmt)
+    return rows
+
+
+def _add_charts_sheet(wb: openpyxl.Workbook, company: str, fin: CompanyFinancials) -> None:
+    """Add a Charts sheet with embedded focus-chart images, when plottable."""
+    import io
+
+    from openpyxl.drawing.image import Image as XLImage
+
+    from screener.exporters import research_note
+
+    periods, key_rows = research_note.key_financials(fin)
+    pngs = research_note.focus_charts(periods, key_rows)
+    if not pngs:
+        return
+    ws = wb.create_sheet(title="Charts")
+    ws.cell(1, 1, f"{company} — Focus charts").font = _TITLE_FONT
+    anchor = 3
+    for title, png in pngs:
+        ws.cell(anchor, 1, title).font = _BOLD
+        image = XLImage(io.BytesIO(png))
+        image.width, image.height = 480, 240
+        ws.add_image(image, f"A{anchor + 1}")
+        anchor += 15
+
+
 def build_workbook(
     fin: CompanyFinancials,
     ar_rows: list | None = None,
@@ -265,6 +352,7 @@ def build_workbook(
 
     sheet_specs: list[tuple[str, list[str], list[_Row]]] = []
     if fin.profit_loss:
+        sheet_specs.append(("Output Sheet", fin.profit_loss.periods, _output_rows(fin)))
         sheet_specs.append((
             "PL", fin.profit_loss.periods, _derived_pl_rows(fin)
         ))
@@ -290,6 +378,7 @@ def build_workbook(
         ws = wb.create_sheet(title=name)
         _write_sheet(ws, f"{company} — {name}", periods, rows)
 
+    _add_charts_sheet(wb, company, fin)
     _append_ar_sheets(wb, company, ar_rows, annual_rows)
 
     if not wb.sheetnames:  # degenerate input — keep the workbook valid
