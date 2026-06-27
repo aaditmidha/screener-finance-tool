@@ -142,18 +142,21 @@ def _cached_engine():
     return engine
 
 
-def _financials_to_excel_bytes(fin: CompanyFinancials, ar_rows: list, annual_rows: list) -> bytes:
+def _financials_to_excel_bytes(fin: CompanyFinancials, ar_rows: list, annual_rows: list,
+                               peer_df: Any = None) -> bytes:
     """Export the template-style model workbook as in-memory bytes.
 
     Args:
         fin: Parsed (and notes-enriched) company financials.
         ar_rows: AR-extracted rows (adds AR sheets when present).
         annual_rows: Stored annual rows (enables the discrepancy sheet).
+        peer_df: Optional ranked peer DataFrame (adds the Peer Comparison sheet).
 
     Returns:
         The workbook contents as bytes (for a Streamlit download button).
     """
-    return model_workbook.to_bytes(fin, ar_rows=ar_rows or None, annual_rows=annual_rows or None)
+    return model_workbook.to_bytes(fin, ar_rows=ar_rows or None, annual_rows=annual_rows or None,
+                                   peer_df=peer_df)
 
 
 # --------------------------------------------------------------------------- #
@@ -188,6 +191,8 @@ def _render_peer_tab(st: Any, service: CompanyDataService, symbol: str) -> None:
     try:
         ranked = comparer.compare(symbol, on_progress=_on_progress)
         progress.empty()
+        # Cache so the Excel model and research note can embed the peer table.
+        st.session_state["peer_ranked"] = (symbol, ranked)
         st.dataframe(ranked, use_container_width=True)
     except ValueError as exc:                       # no comparable data gathered
         progress.empty()
@@ -333,13 +338,16 @@ def _render_annual_reports_tab(st: Any, service: CompanyDataService, symbol: str
 
 
 def _render_research_note_tab(st: Any, fin: CompanyFinancials, symbol: str,
-                              name: str, pledge_history: list) -> None:
-    """Generate and download a one-page research note (.docx)."""
+                              name: str, pledge_history: list,
+                              ar_rows: list | None = None, peer_df: Any = None) -> None:
+    """Generate and download a detailed research note (.docx)."""
     from screener.exporters import research_note
 
-    st.caption("Generates a one-page research note (Word .docx): thesis sections (Groq), "
-               "a Key Financials table and focus charts. Set `GROQ_API_KEY` for the "
-               "written sections; the tables and charts render without it.")
+    st.caption("Generates a detailed research note (Word .docx): thesis sections (Groq), "
+               "a focus-chart grid, full income-statement / balance-sheet / cash-flow / "
+               "ratios tables, and a peer table. Uploaded annual reports enrich the prose "
+               "(guidance, risks). Set `GROQ_API_KEY` for the written sections; tables and "
+               "charts render without it.")
     if not st.button("Generate research note", key="note_btn", type="primary"):
         return
     score = forensic_score.compute(fin, pledge_history=pledge_history or None)
@@ -347,7 +355,8 @@ def _render_research_note_tab(st: Any, fin: CompanyFinancials, symbol: str,
     metrics["Forensic score"] = f"{score.score:.0f}/100 ({score.verdict})"
 
     with st.spinner("Writing note…"):
-        note = research_note.generate(fin, name, symbol, metrics=metrics)
+        note = research_note.generate(fin, name, symbol, metrics=metrics,
+                                      peer_ranking=peer_df, ar_rows=ar_rows)
         docx_bytes = research_note.to_docx(note)
 
     if note.sections:
@@ -355,8 +364,8 @@ def _render_research_note_tab(st: Any, fin: CompanyFinancials, symbol: str,
             st.markdown(f"**{section.heading}**")
             st.write(section.body)
     else:
-        st.info("LLM sections unavailable (no GROQ_API_KEY) — the note still includes "
-                "the Key Financials table and focus charts.")
+        st.info("LLM sections unavailable (no GROQ_API_KEY) — the note still includes the "
+                "full statement tables, ratios and focus charts.")
     st.download_button(
         "⬇ Download research note (.docx)", data=docx_bytes,
         file_name=f"{symbol}_research_note.docx",
@@ -672,9 +681,13 @@ def main() -> None:
     company = service._companies.get_by_symbol(symbol)
     ar_rows = service._ar.for_company(company.id) if company else []
     annual_rows = service._annual.for_company(company.id) if company else []
+    # Reuse a peer ranking computed in the Peer Compare tab (same symbol) so the
+    # Excel model and research note can embed the peer table.
+    cached_peers = st.session_state.get("peer_ranked")
+    peer_df = cached_peers[1] if cached_peers and cached_peers[0] == symbol else None
     st.download_button(
         "Download Excel model",
-        data=_financials_to_excel_bytes(fin, ar_rows, annual_rows),
+        data=_financials_to_excel_bytes(fin, ar_rows, annual_rows, peer_df=peer_df),
         file_name=f"{symbol}_model.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
@@ -706,7 +719,8 @@ def main() -> None:
         _render_tearsheet_tab(st, _build_tearsheet_input(symbol, name or fin.name, fin,
                                                           pledge_history, ar_pair))
     with note_tab:
-        _render_research_note_tab(st, fin, symbol, name or fin.name, pledge_history)
+        _render_research_note_tab(st, fin, symbol, name or fin.name, pledge_history,
+                                  ar_rows=ar_rows, peer_df=peer_df)
     with screener_tab:
         _render_screener_tab(st, service)
     with pledge:

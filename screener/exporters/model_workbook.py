@@ -25,6 +25,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from screener.config import CONFIG
+from screener.exporters import financial_model
 from screener.models import ar_insights, operational
 from screener.scraper.parser import CompanyFinancials, FinancialTable
 
@@ -242,67 +243,42 @@ def _operational_rows(op: "object") -> list[_Row]:
     return rows
 
 
-# Operational metrics surfaced on the Output Sheet (label → already in operational).
-_OUTPUT_OP_METRICS = [
-    "Asset turnover", "Receivable days", "Inventory days", "Payable days",
-    "Cash conversion cycle (days)", "CFO / PAT",
-]
-# operational fmt → Excel number format / pct flag.
-_OP_FMT = {"pct": (None, True), "x": ('0.00"x"', False), "days": ("0", False)}
+# financial_model row kind → (Excel number format, pct flag for _Row).
+_SUMMARY_FMT = {
+    "num": (_NUM_FMT, False),
+    "pct": (_PCT_FMT, True),
+    "x": ('0.00"x"', False),
+    "days": ("0", False),
+    "eps": ("#,##0.00", False),
+    "ratio": ("0.00", False),
+}
 
 
 def _output_rows(fin: CompanyFinancials) -> list[_Row]:
-    """Build the Output Sheet — a one-look summary dashboard.
+    """Build the Output Sheet — the analyst summary mirroring reference models.
 
-    Growth, margins, returns (ROCE/ROE), leverage and working-capital metrics
-    across all periods, mirroring the reference models' Output/Summary sheet.
+    A sectioned one-look view — income statement, common-size (% of revenue),
+    YoY growth, mapped balance sheet and cash flow, and a ratios/returns block —
+    derived once via :mod:`screener.exporters.financial_model` so the workbook
+    and the research note always agree. Empty when there is no P&L.
 
     Args:
         fin: Parsed company financials.
 
     Returns:
-        Ordered _Row list; empty if there is no P&L.
+        Ordered _Row list with bold section headers between blocks.
     """
-    pl, bs = fin.profit_loss, fin.balance_sheet
-    if pl is None:
-        return []
-    rev = _series(pl, "sales", "revenue")
-    op = _series(pl, "operating profit")
-    dep = _series(pl, "depreciation")
-    pat = _series(pl, "net profit", "profit after tax")
-    eps = _series(pl, "eps")
-    ebit = _combine(lambda o, d: o - d, op, dep)
-    equity = _combine(lambda a, b: a + b,
-                      _series(bs, "equity capital", "share capital"), _series(bs, "reserves"))
-    debt = _series(bs, "borrowings", "debt")
-    cap_employed = _combine(lambda e, d: e + d, equity, debt) if equity and debt else equity
-
-    op_data = {m.label: (m.values, m.fmt) for m in operational.compute(fin).metrics}
     rows: list[_Row] = []
-
-    def add(label, values, fmt="num", bold=False):
-        if values and any(v is not None for v in values):
-            num_fmt, pct = _OP_FMT.get(fmt, (None, fmt == "pct"))
-            if fmt == "de":
-                num_fmt = "0.00"
-            rows.append(_Row(label, list(values), bold=bold, pct=pct, num_fmt=num_fmt))
-
-    add("Revenue", rev, "num", bold=True)
-    add("Revenue growth %", _yoy(rev), "pct")
-    add("EBITDA", op, "num")
-    add("EBITDA margin %", _ratio(op, rev), "pct")
-    add("EBIT", ebit, "num")
-    add("EBIT margin %", _ratio(ebit, rev), "pct")
-    add("PAT", pat, "num", bold=True)
-    add("PAT margin %", _ratio(pat, rev), "pct")
-    add("EPS", eps, "num")
-    add("ROCE %", _ratio(ebit, cap_employed), "pct")
-    add("ROE %", _ratio(pat, equity), "pct")
-    add("Debt / Equity", _ratio(debt, equity), "de")
-    for label in _OUTPUT_OP_METRICS:
-        if label in op_data:
-            values, fmt = op_data[label]
-            add(label, values, fmt)
+    for index, section in enumerate(financial_model.summary_sections(fin)):
+        if index:
+            rows.append(_Row("", [], is_header=True))  # blank separator
+        rows.append(_Row(section.title, [], is_header=True))
+        for sr in section.rows:
+            if sr.kind == "header":
+                rows.append(_Row(f"  {sr.label}", [], is_header=True))
+                continue
+            num_fmt, pct = _SUMMARY_FMT.get(sr.kind, (_NUM_FMT, False))
+            rows.append(_Row(sr.label, list(sr.values), bold=sr.bold, pct=pct, num_fmt=num_fmt))
     return rows
 
 
@@ -314,8 +290,7 @@ def _add_charts_sheet(wb: openpyxl.Workbook, company: str, fin: CompanyFinancial
 
     from screener.exporters import research_note
 
-    periods, key_rows = research_note.key_financials(fin)
-    pngs = research_note.focus_charts(periods, key_rows)
+    pngs = research_note.chart_grid(fin)
     if not pngs:
         return
     ws = wb.create_sheet(title="Charts")
@@ -333,6 +308,7 @@ def build_workbook(
     fin: CompanyFinancials,
     ar_rows: list | None = None,
     annual_rows: list | None = None,
+    peer_df: "object | None" = None,
 ) -> openpyxl.Workbook:
     """Assemble the full model workbook from parsed+enriched financials.
 
@@ -341,10 +317,13 @@ def build_workbook(
         ar_rows: Optional ARExtractedData rows → adds AR Financials / Screener-
             vs-AR / Risk Timeline sheets.
         annual_rows: Optional AnnualData rows → enables the discrepancy sheet.
+        peer_df: Optional ranked peer DataFrame (from peer_comparison) → adds a
+            Peer Comparison sheet.
 
     Returns:
-        An openpyxl Workbook with PL/BS/CF/Quarterly/Operational/Notes sheets
-        (plus AR sheets when ar_rows is given); sheets with no data are omitted.
+        An openpyxl Workbook with Output/PL/BS/CF/Quarterly/Operational/Notes
+        sheets (plus Peer/AR sheets when supplied); sheets with no data are
+        omitted.
     """
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
@@ -379,6 +358,7 @@ def build_workbook(
         _write_sheet(ws, f"{company} — {name}", periods, rows)
 
     _add_charts_sheet(wb, company, fin)
+    _append_peer_sheet(wb, company, peer_df)
     _append_ar_sheets(wb, company, ar_rows, annual_rows)
 
     if not wb.sheetnames:  # degenerate input — keep the workbook valid
@@ -415,6 +395,26 @@ def _write_table(ws: Worksheet, title: str, headers: list[str],
             cell = ws.cell(3 + r_off, col, value)
             if fill is not None:
                 cell.fill = fill
+
+
+def _append_peer_sheet(wb: openpyxl.Workbook, company: str, peer_df: "object | None") -> None:
+    """Add a ranked Peer Comparison sheet from a peer_comparison DataFrame."""
+    if peer_df is None or getattr(peer_df, "empty", True):
+        return
+    headers = ["Symbol", "Name", "ROCE %", "ROE %", "Rev growth %", "Composite rank"]
+    rows: list[list] = []
+    for symbol, record in peer_df.iterrows():
+        rank = record.get("rank_composite")
+        rows.append([
+            str(symbol), str(record.get("name", "")),
+            record.get("roce"), record.get("roe"), record.get("revenue_growth"),
+            int(rank) if rank is not None and rank == rank else None,  # rank==rank drops NaN
+        ])
+    ws = wb.create_sheet(title="Peer Comparison")
+    _write_table(ws, f"{company} — Peer comparison (ranked)", headers, rows)
+    for r_off in range(len(rows)):                       # percent-format ratio columns
+        for col in (3, 4, 5):
+            ws.cell(3 + r_off, col).number_format = _PCT_FMT
 
 
 def _append_ar_sheets(wb: openpyxl.Workbook, company: str,
@@ -459,19 +459,20 @@ def _append_ar_sheets(wb: openpyxl.Workbook, company: str,
 
 
 def to_bytes(fin: CompanyFinancials, ar_rows: list | None = None,
-             annual_rows: list | None = None) -> bytes:
+             annual_rows: list | None = None, peer_df: "object | None" = None) -> bytes:
     """Return the model workbook as in-memory bytes (for download buttons).
 
     Args:
         fin: Parsed company financials.
         ar_rows: Optional ARExtractedData rows → adds AR sheets.
         annual_rows: Optional AnnualData rows → enables the discrepancy sheet.
+        peer_df: Optional ranked peer DataFrame → adds the Peer Comparison sheet.
 
     Returns:
         The .xlsx file contents.
     """
     buffer = io.BytesIO()
-    build_workbook(fin, ar_rows=ar_rows, annual_rows=annual_rows).save(buffer)
+    build_workbook(fin, ar_rows=ar_rows, annual_rows=annual_rows, peer_df=peer_df).save(buffer)
     return buffer.getvalue()
 
 

@@ -110,11 +110,13 @@ class TestGenerateAndDocx:
         assert data[:2] == b"PK"                       # docx is a zip
         xml = zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml").decode("utf-8", "ignore")
         assert "Test Co" in xml
-        assert "Key financials" in xml
+        assert "Financials" in xml                      # full statement tables
+        assert "Income statement (INR cr)" in xml
         assert "Capacity expansion underway" in xml
 
     def test_to_docx_without_sections_still_renders(self, fin) -> None:
         note = research_note.generate(fin, "Test Co", "TEST", client=_FakeClient("bad"))
         data = research_note.to_docx(note)
         xml = zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml").decode("utf-8", "ignore")
-        assert "Key financials" in xml                 # tables/charts present without LLM
+        assert "Income statement (INR cr)" in xml       # tables/charts present without LLM
+        assert "Focus charts" in xml
