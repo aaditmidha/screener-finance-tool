@@ -26,10 +26,11 @@ logs/
 !.env.example
 .streamlit/secrets.toml
 
-# IDE
+# IDE / local tooling
 .vscode/
 .idea/
 *.iml
+.claude/launch.json
 
 # OS
 .DS_Store

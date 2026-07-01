@@ -229,14 +229,16 @@ class TestOutputAndChartsSheets:
         assert workbook.sheetnames[0] == "Output Sheet"
         ws = workbook["Output Sheet"]
         labels = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)]
-        for expected in ("Revenue", "Revenue growth %", "EBITDA margin %", "PAT",
-                         "ROCE %", "ROE %", "Debt / Equity"):
+        # Sectioned analyst summary: section titles + key derived rows.
+        for expected in ("Income statement", "Revenue from operations",
+                         "Common-size (% of revenue)", "EBITDA margin", "Growth (% YoY)",
+                         "Balance sheet", "Ratios & returns", "ROCE", "ROE", "Debt / equity"):
             assert any(expected == l for l in labels), f"missing {expected}"
 
     def test_output_roce_value(self, workbook) -> None:
         ws = workbook["Output Sheet"]
         for r in range(3, ws.max_row + 1):
-            if ws.cell(r, 1).value == "ROCE %":
+            if ws.cell(r, 1).value == "ROCE":
                 # FY26: EBIT 1500-220=1280; capital employed 200+4800+700=5700 → 22.5%
                 assert ws.cell(r, 3).value == pytest.approx(0.2246, abs=1e-3)
                 assert ws.cell(r, 3).number_format == "0.0%"
@@ -246,6 +248,26 @@ class TestOutputAndChartsSheets:
     def test_charts_sheet_has_images(self, workbook) -> None:
         assert "Charts" in workbook.sheetnames
         assert len(workbook["Charts"]._images) >= 1   # embedded focus charts
+
+
+class TestPeerSheet:
+    def test_peer_sheet_added_from_dataframe(self, enriched_fin) -> None:
+        import pandas as pd
+        df = pd.DataFrame(
+            {"name": ["Acme", "Beta"], "roce": [0.30, 0.20], "roe": [0.25, 0.18],
+             "revenue_growth": [0.15, 0.10], "rank_composite": [1, 2]},
+            index=["ACME", "BETA"])
+        wb = openpyxl.load_workbook(io.BytesIO(model_workbook.to_bytes(enriched_fin, peer_df=df)))
+        assert "Peer Comparison" in wb.sheetnames
+        ws = wb["Peer Comparison"]
+        symbols = [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)]
+        assert "ACME" in symbols and "BETA" in symbols
+        # ROCE column is percent-formatted.
+        assert ws.cell(3, 3).number_format == "0.0%"
+
+    def test_no_peer_df_omits_sheet(self, enriched_fin) -> None:
+        wb = openpyxl.load_workbook(io.BytesIO(model_workbook.to_bytes(enriched_fin)))
+        assert "Peer Comparison" not in wb.sheetnames
 
 
 class TestRobustness:

@@ -327,3 +327,26 @@ all verified correct.
 on the aggregated Screener page, where some inputs are absent by design) were
 downgraded from WARNING to DEBUG — the degradation is expected and already
 disclosed in the UI, so it shouldn't spam logs.
+
+## 19. Detailed model + note: shared derivation layer
+
+**Trigger:** the generated Excel model and research note were judged "not
+detailed enough" against reference sell-side artifacts (a POCL Nuvama meet note
+and full POCL/Paramount workbooks).
+
+**Decision:** introduce `screener/exporters/financial_model.py` as a single
+canonical derivation layer — derived income statement, common-size (% of
+revenue), YoY growth, mapped balance sheet and cash flow, and a profitability /
+returns / leverage / efficiency / per-share ratios block — built once from the
+parsed Screener statements (reusing `models/operational.py` for day-counts).
+Both `model_workbook.py` and `research_note.py` consume it, so the workbook and
+the note can never disagree.
+
+**Excel:** the Output Sheet is now the full sectioned analyst summary (was a
+flat metric dashboard), plus an optional Peer Comparison sheet. **Note:** gains
+full IS/BS/CF/ratios tables, a four-chart focus grid, 7–9 LLM thesis sections
+(richer context now includes common-size/growth/ratios + uploaded-AR guidance
+and disclosed risks), and reference-style house formatting (navy headings,
+"Source:" captions, INR cr, no em dashes). Qualitative depth (segments,
+capacity, shareholding, KMP) is bounded by what's extracted from uploaded ARs;
+the fully data-driven financial depth renders regardless. LLM stays on Groq.
