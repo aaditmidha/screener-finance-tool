@@ -143,7 +143,7 @@ def _cached_engine():
 
 
 def _financials_to_excel_bytes(fin: CompanyFinancials, ar_rows: list, annual_rows: list,
-                               peer_df: Any = None) -> bytes:
+                               peer_df: Any = None, assumptions: Any = None) -> bytes:
     """Export the template-style model workbook as in-memory bytes.
 
     Args:
@@ -151,12 +151,13 @@ def _financials_to_excel_bytes(fin: CompanyFinancials, ar_rows: list, annual_row
         ar_rows: AR-extracted rows (adds AR sheets when present).
         annual_rows: Stored annual rows (enables the discrepancy sheet).
         peer_df: Optional ranked peer DataFrame (adds the Peer Comparison sheet).
+        assumptions: Optional ForecastAssumptions (drives the Forecast sheet).
 
     Returns:
         The workbook contents as bytes (for a Streamlit download button).
     """
     return model_workbook.to_bytes(fin, ar_rows=ar_rows or None, annual_rows=annual_rows or None,
-                                   peer_df=peer_df)
+                                   peer_df=peer_df, assumptions=assumptions)
 
 
 # --------------------------------------------------------------------------- #
@@ -337,9 +338,69 @@ def _render_annual_reports_tab(st: Any, service: CompanyDataService, symbol: str
         ), use_container_width=True)
 
 
+def _fmt_forecast_cell(value: float | None, kind: str) -> str:
+    """Format a forecast value for the preview table by row kind."""
+    if value is None:
+        return "-"
+    if kind == "pct":
+        return f"{value * 100:.1f}%"
+    if kind == "eps":
+        return f"{value:,.2f}"
+    return f"{value:,.0f}"
+
+
+def _render_forecast_tab(st: Any, fin: CompanyFinancials, symbol: str) -> None:
+    """Editable driver-based P&L forecast; assumptions flow into Excel + note."""
+    import pandas as pd
+
+    from screener.models import forecast
+
+    st.caption("Driver-based 3-year P&L projection. Edit the drivers below — they flow into "
+               "the downloaded Excel (Forecast sheet) and the research note. Balance-sheet / "
+               "cash-flow forecast is a planned follow-up.")
+    defaults = forecast.default_assumptions(fin)
+    if defaults is None:
+        st.info("Not enough P&L history to build a forecast.")
+        return
+    cached = st.session_state.get("fcast_assumptions")
+    seed = cached[1] if cached and cached[0] == symbol else defaults
+
+    c1, c2, c3 = st.columns(3)
+    rev_g = c1.number_input("Revenue growth % / yr", value=round(seed.revenue_growth * 100, 1),
+                            step=1.0, key="fc_revg") / 100
+    ebitda_m = c2.number_input("EBITDA margin %", value=round(seed.ebitda_margin * 100, 1),
+                               step=0.5, key="fc_ebitda") / 100
+    tax_r = c3.number_input("Tax rate %", value=round(seed.tax_rate * 100, 1),
+                            step=1.0, key="fc_tax") / 100
+    c4, c5, c6 = st.columns(3)
+    dep_p = c4.number_input("Depreciation % of revenue", value=round(seed.depreciation_pct * 100, 2),
+                            step=0.5, key="fc_dep") / 100
+    interest = c5.number_input("Finance costs (INR cr)", value=round(seed.interest, 1),
+                               step=1.0, key="fc_int")
+    other_inc = c6.number_input("Other income (INR cr)", value=round(seed.other_income, 1),
+                                step=1.0, key="fc_oi")
+
+    assumptions = forecast.ForecastAssumptions(
+        revenue_growth=rev_g, ebitda_margin=ebitda_m, depreciation_pct=dep_p,
+        other_income=other_inc, interest=interest, tax_rate=tax_r, shares=seed.shares)
+    st.session_state["fcast_assumptions"] = (symbol, assumptions)
+
+    result = forecast.project(fin, assumptions)
+    if result is None:
+        st.info("Forecast unavailable for this company.")
+        return
+    data = {"Particulars": [r.label for r in result.rows]}
+    for i, period in enumerate(result.periods):
+        data[period] = [_fmt_forecast_cell(r.values[i], r.kind) for r in result.rows]
+    st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+    st.caption(f"Forecast years marked 'E': {', '.join(result.forecast_periods)}. "
+               "Use the Excel / Research Note downloads to export this projection.")
+
+
 def _render_research_note_tab(st: Any, fin: CompanyFinancials, symbol: str,
                               name: str, pledge_history: list,
-                              ar_rows: list | None = None, peer_df: Any = None) -> None:
+                              ar_rows: list | None = None, peer_df: Any = None,
+                              assumptions: Any = None) -> None:
     """Generate and download a detailed research note (.docx)."""
     from screener.exporters import research_note
 
@@ -356,7 +417,8 @@ def _render_research_note_tab(st: Any, fin: CompanyFinancials, symbol: str,
 
     with st.spinner("Writing note…"):
         note = research_note.generate(fin, name, symbol, metrics=metrics,
-                                      peer_ranking=peer_df, ar_rows=ar_rows)
+                                      peer_ranking=peer_df, ar_rows=ar_rows,
+                                      assumptions=assumptions)
         docx_bytes = research_note.to_docx(note)
 
     if note.sections:
@@ -706,19 +768,24 @@ def main() -> None:
     # Excel model and research note can embed the peer table.
     cached_peers = st.session_state.get("peer_ranked")
     peer_df = cached_peers[1] if cached_peers and cached_peers[0] == symbol else None
+    # Reuse forecast drivers edited in the Forecast tab (same symbol) so the Excel
+    # Forecast sheet and the note's forecast reflect the user's assumptions.
+    cached_fcast = st.session_state.get("fcast_assumptions")
+    assumptions = cached_fcast[1] if cached_fcast and cached_fcast[0] == symbol else None
     st.download_button(
         "Download Excel model",
-        data=_financials_to_excel_bytes(fin, ar_rows, annual_rows, peer_df=peer_df),
+        data=_financials_to_excel_bytes(fin, ar_rows, annual_rows, peer_df=peer_df,
+                                        assumptions=assumptions),
         file_name=f"{symbol}_model.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
     # --- Tabs ------------------------------------------------------------- #
     (upload, annual, quarterly, ratios, operational_tab, charts_tab, peers, tearsheet,
-     note_tab, screener_tab, pledge, annual_reports, management) = st.tabs(
+     forecast_tab, note_tab, screener_tab, pledge, annual_reports, management) = st.tabs(
         ["📤 Upload & Analyze", "Annual", "Quarterly", "Ratios", "Operational Data",
-         "📈 Charts", "Peer Compare", "Tearsheet", "📝 Research Note", "Custom Screener",
-         "🚨 Pledge", "🧾 Annual Reports", "🎙 Management"]
+         "📈 Charts", "Peer Compare", "Tearsheet", "🔮 Forecast", "📝 Research Note",
+         "Custom Screener", "🚨 Pledge", "🧾 Annual Reports", "🎙 Management"]
     )
     with upload:
         _render_upload_tab(st, service, symbol, name or fin.name)
@@ -739,9 +806,11 @@ def main() -> None:
     with tearsheet:
         _render_tearsheet_tab(st, _build_tearsheet_input(symbol, name or fin.name, fin,
                                                           pledge_history, ar_pair))
+    with forecast_tab:
+        _render_forecast_tab(st, fin, symbol)
     with note_tab:
         _render_research_note_tab(st, fin, symbol, name or fin.name, pledge_history,
-                                  ar_rows=ar_rows, peer_df=peer_df)
+                                  ar_rows=ar_rows, peer_df=peer_df, assumptions=assumptions)
     with screener_tab:
         _render_screener_tab(st, service)
     with pledge:
