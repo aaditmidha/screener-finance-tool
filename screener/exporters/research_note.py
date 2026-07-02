@@ -335,7 +335,7 @@ def _qualitative_context(ar_rows: list | None) -> str:
 
 
 def _serialise_context(fin: CompanyFinancials, metrics: dict[str, Any] | None,
-                       ar_rows: list | None = None) -> str:
+                       ar_rows: list | None = None, forecast_result: Any = None) -> str:
     """Build the rich data block the LLM writes from."""
     periods, rows = key_financials(fin)
     lines = ["## Key financials (oldest to newest: " + ", ".join(periods) + ")"]
@@ -352,6 +352,17 @@ def _serialise_context(fin: CompanyFinancials, metrics: dict[str, Any] | None,
             lines.append(f"\n## {title}")
             for r in body:
                 lines.append(f"- {r.label}: {', '.join(_fmt_stmt(v, r.kind) for v in r.values)}")
+
+    if forecast_result is not None:
+        a = forecast_result.assumptions
+        lines.append(f"\n## Driver-based forecast ({', '.join(forecast_result.forecast_periods)})")
+        lines.append(f"- Assumptions: revenue growth {a.revenue_growth*100:.1f}%/yr, "
+                     f"EBITDA margin {a.ebitda_margin*100:.1f}%, tax rate {a.tax_rate*100:.1f}%")
+        for r in forecast_result.rows:
+            if r.label in ("Revenue from operations", "EBITDA", "Profit after tax", "EPS (INR)"):
+                tail = r.values[forecast_result.n_history:]
+                lines.append(f"- {r.label} (forecast): "
+                             f"{', '.join(_fmt_stmt(v, r.kind) for v in tail)}")
 
     if metrics:
         lines.append("\n## Forensic / quality metrics")
@@ -382,7 +393,8 @@ def generate(fin: CompanyFinancials, name: str, symbol: str,
              metrics: dict[str, Any] | None = None,
              peer_ranking: Any = None,
              client: ChatClient | None = None,
-             ar_rows: list | None = None) -> ResearchNote:
+             ar_rows: list | None = None,
+             assumptions: Any = None) -> ResearchNote:
     """Assemble the full research-note content for a company.
 
     Args:
@@ -394,16 +406,26 @@ def generate(fin: CompanyFinancials, name: str, symbol: str,
         client: Optional injected chat client.
         ar_rows: Optional ARExtractedData rows → adds management guidance and
             disclosed risks to the LLM context for richer prose.
+        assumptions: Optional ForecastAssumptions → drives the forecast table
+            and feeds the forecast into the LLM context.
 
     Returns:
         A populated :class:`ResearchNote`.
     """
+    from screener.models import forecast
+
     periods, rows = key_financials(fin)
-    context = _serialise_context(fin, metrics, ar_rows)
+    forecast_result = forecast.project(fin, assumptions)
+    context = _serialise_context(fin, metrics, ar_rows, forecast_result)
     sections = build_sections(name, symbol, context, client=client)
+    statements = _statement_tables(fin)
+    if forecast_result is not None:
+        statements.append(StatementTable(
+            "P&L forecast (FY+1 onward, 'E' = estimate, INR cr)",
+            forecast_result.periods, forecast_result.rows))
     note = ResearchNote(symbol=symbol, name=name, sections=sections,
                         periods=periods, key_financials=rows,
-                        statements=_statement_tables(fin), charts=chart_grid(fin))
+                        statements=statements, charts=chart_grid(fin))
     if peer_ranking is not None and not peer_ranking.empty:
         note.peer_columns = ["Symbol", *[str(c) for c in peer_ranking.columns]]
         note.peer_rows = [[idx, *list(r)] for idx, r in

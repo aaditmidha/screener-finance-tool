@@ -350,3 +350,22 @@ and disclosed risks), and reference-style house formatting (navy headings,
 "Source:" captions, INR cr, no em dashes). Qualitative depth (segments,
 capacity, shareholding, KMP) is bounded by what's extracted from uploaded ARs;
 the fully data-driven financial depth renders regardless. LLM stays on Groq.
+
+## 20. Driver-based P&L forecast (first cut of the forecast model)
+
+**Decision:** add `screener/models/forecast.py` — a transparent, driver-based
+income-statement projection (default 3 years) in the spirit of the reference
+models' FYxxE columns. Drivers: revenue growth, EBITDA margin, depreciation %
+of revenue, other income, finance costs, tax rate, share count. Defaults are
+inferred from the company's own history (3-yr revenue CAGR clamped to a sane
+band, latest margins, implied shares from PAT/EPS) so a forecast appears out
+of the box; every driver is editable in the new 🔮 Forecast tab and the edited
+assumptions flow into the Excel (Forecast sheet: assumptions block + combined
+historical+forecast IS) and the research note (forecast table + forecast
+context for the LLM prose).
+
+**Scope guard:** P&L only. A balancing forecast balance sheet / cash flow
+(working-capital-day and capex driven) is a deliberate follow-up — doing it
+credibly needs the WC-day and capex drivers surfaced as assumptions too.
+Nothing is fabricated: no usable revenue history → no forecast, and forecast
+columns are always suffixed "E".

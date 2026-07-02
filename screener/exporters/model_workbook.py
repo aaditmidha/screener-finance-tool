@@ -282,6 +282,52 @@ def _output_rows(fin: CompanyFinancials) -> list[_Row]:
     return rows
 
 
+def _forecast_sheet(wb: openpyxl.Workbook, company: str, fin: CompanyFinancials,
+                    assumptions: "object | None") -> None:
+    """Add a driver-based P&L Forecast sheet (assumptions block + projection)."""
+    from screener.models import forecast
+
+    result = forecast.project(fin, assumptions)
+    if result is None:
+        return
+    a = result.assumptions
+    ws = wb.create_sheet(title="Forecast")
+    ws.cell(1, 1, f"{company} — Driver-based P&L forecast").font = _TITLE_FONT
+    ws.cell(2, 1, "Assumptions (editable in the app's Forecast tab)").font = _BOLD
+    block = [
+        ("Revenue growth (each year)", a.revenue_growth, _PCT_FMT),
+        ("EBITDA margin", a.ebitda_margin, _PCT_FMT),
+        ("Depreciation % of revenue", a.depreciation_pct, _PCT_FMT),
+        ("Other income (INR cr)", a.other_income, _NUM_FMT),
+        ("Finance costs (INR cr)", a.interest, _NUM_FMT),
+        ("Tax rate", a.tax_rate, _PCT_FMT),
+        ("Shares outstanding (cr)", a.shares, "#,##0.00"),
+    ]
+    row = 3
+    for label, value, fmt in block:
+        ws.cell(row, 1, label)
+        ws.cell(row, 2, value).number_format = fmt
+        row += 1
+    ws.column_dimensions["A"].width = 36
+
+    header = row + 1
+    ws.cell(header, 1, "Income statement (historical + forecast 'E')").font = _BOLD
+    for col, period in enumerate(result.periods, start=2):
+        ws.cell(header, col, period).font = _BOLD
+        ws.column_dimensions[get_column_letter(col)].width = 12
+    for i, srow in enumerate(result.rows):
+        r = header + 1 + i
+        label_cell = ws.cell(r, 1, srow.label)
+        if srow.bold:
+            label_cell.font = _BOLD
+        num_fmt = _SUMMARY_FMT.get(srow.kind, (_NUM_FMT, False))[0]
+        for col, value in enumerate(srow.values, start=2):
+            if value is None:
+                continue
+            ws.cell(r, col, value).number_format = num_fmt
+    ws.freeze_panes = ws.cell(header + 1, 2)
+
+
 def _add_charts_sheet(wb: openpyxl.Workbook, company: str, fin: CompanyFinancials) -> None:
     """Add a Charts sheet with embedded focus-chart images, when plottable."""
     import io
@@ -309,6 +355,7 @@ def build_workbook(
     ar_rows: list | None = None,
     annual_rows: list | None = None,
     peer_df: "object | None" = None,
+    assumptions: "object | None" = None,
 ) -> openpyxl.Workbook:
     """Assemble the full model workbook from parsed+enriched financials.
 
@@ -357,6 +404,7 @@ def build_workbook(
         ws = wb.create_sheet(title=name)
         _write_sheet(ws, f"{company} — {name}", periods, rows)
 
+    _forecast_sheet(wb, company, fin, assumptions)
     _add_charts_sheet(wb, company, fin)
     _append_peer_sheet(wb, company, peer_df)
     _append_ar_sheets(wb, company, ar_rows, annual_rows)
@@ -459,7 +507,8 @@ def _append_ar_sheets(wb: openpyxl.Workbook, company: str,
 
 
 def to_bytes(fin: CompanyFinancials, ar_rows: list | None = None,
-             annual_rows: list | None = None, peer_df: "object | None" = None) -> bytes:
+             annual_rows: list | None = None, peer_df: "object | None" = None,
+             assumptions: "object | None" = None) -> bytes:
     """Return the model workbook as in-memory bytes (for download buttons).
 
     Args:
@@ -467,12 +516,15 @@ def to_bytes(fin: CompanyFinancials, ar_rows: list | None = None,
         ar_rows: Optional ARExtractedData rows → adds AR sheets.
         annual_rows: Optional AnnualData rows → enables the discrepancy sheet.
         peer_df: Optional ranked peer DataFrame → adds the Peer Comparison sheet.
+        assumptions: Optional ForecastAssumptions → drives the Forecast sheet
+            (defaults inferred from history when omitted).
 
     Returns:
         The .xlsx file contents.
     """
     buffer = io.BytesIO()
-    build_workbook(fin, ar_rows=ar_rows, annual_rows=annual_rows, peer_df=peer_df).save(buffer)
+    build_workbook(fin, ar_rows=ar_rows, annual_rows=annual_rows, peer_df=peer_df,
+                   assumptions=assumptions).save(buffer)
     return buffer.getvalue()
 
 
